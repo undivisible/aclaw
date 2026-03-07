@@ -1,24 +1,26 @@
-//! Subspace Runtime — lightweight agent runtime CLI.
+//! aclaw — Lightweight agent runtime CLI
+//! Successor to OpenClaw. Best-of-breed from ZeroClaw, NanoClaw, HiClaw.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-use subspace_runtime::agent::AgentRunner;
-use subspace_runtime::channels::cli::CliChannel;
-use subspace_runtime::config::Config;
-use subspace_runtime::memory::sqlite::SqliteMemory;
-use subspace_runtime::providers::anthropic::AnthropicProvider;
-use subspace_runtime::providers::ollama::OllamaProvider;
-use subspace_runtime::providers::openai_compat::OpenAiCompatProvider;
-use subspace_runtime::providers::Provider;
-use subspace_runtime::tools::file_ops::{FileReadTool, FileWriteTool};
-use subspace_runtime::tools::shell::ShellTool;
-use subspace_runtime::tools::Tool;
+use aclaw::agent::AgentRunner;
+use aclaw::channels::cli::CliChannel;
+use aclaw::config::Config;
+use aclaw::gateway;
+use aclaw::memory::sqlite::SqliteMemory;
+use aclaw::providers::anthropic::AnthropicProvider;
+use aclaw::providers::ollama::OllamaProvider;
+use aclaw::providers::openai_compat::OpenAiCompatProvider;
+use aclaw::providers::Provider;
+use aclaw::tools::file_ops::{FileReadTool, FileWriteTool};
+use aclaw::tools::shell::ShellTool;
+use aclaw::tools::Tool;
 
 #[derive(Parser)]
-#[command(name = "subspace-rt", about = "Lightweight agent runtime", version)]
+#[command(name = "aclaw", about = "Lightweight agent runtime — successor to OpenClaw", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -29,7 +31,7 @@ enum Commands {
     /// Start interactive agent chat
     Chat {
         /// Configuration file path
-        #[arg(short, long, default_value = "subspace-rt.json")]
+        #[arg(short, long, default_value = "aclaw.json")]
         config: String,
 
         /// Override the model
@@ -47,12 +49,23 @@ enum Commands {
         message: String,
 
         /// Configuration file path
-        #[arg(short, long, default_value = "subspace-rt.json")]
+        #[arg(short, long, default_value = "aclaw.json")]
         config: String,
 
         /// Override the model
         #[arg(short, long)]
         model: Option<String>,
+    },
+
+    /// Start HTTP/WebSocket gateway
+    Gateway {
+        /// Listen address
+        #[arg(short, long, default_value = "0.0.0.0:8080")]
+        addr: String,
+
+        /// Configuration file path
+        #[arg(short, long, default_value = "aclaw.json")]
+        config: String,
     },
 
     /// Show runtime status
@@ -86,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
 
             let provider = build_provider(&cfg);
             let memory = Arc::new(SqliteMemory::new(
-                &workspace.join(".subspace-rt/memory.db").to_string_lossy(),
+                &workspace.join(".aclaw/memory.db").to_string_lossy(),
             )?);
 
             let tools: Vec<Arc<dyn Tool>> = vec![
@@ -97,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
 
             let runner = AgentRunner::new(provider, tools, memory, &cfg.system_prompt, model);
 
-            println!("🚀 Subspace Runtime — {} via {}", cfg.model, cfg.provider.name);
+            println!("🚀 aclaw — {} via {}", cfg.model, cfg.provider.name);
             println!("   Workspace: {}", workspace.display());
             println!("   Type /quit to exit\n");
 
@@ -114,9 +127,18 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", response);
         }
 
+        Commands::Gateway { addr, config } => {
+            let _cfg = load_config(&config);
+            println!("🌐 aclaw Gateway — starting on {}", addr);
+            println!("   API: http://{}/api/chat", addr);
+            println!("   WebSocket: ws://{}/ws", addr);
+            gateway::start_gateway(&addr).await?;
+        }
+
         Commands::Status => {
-            println!("Subspace Runtime v{}", env!("CARGO_PKG_VERSION"));
+            println!("aclaw v{}", env!("CARGO_PKG_VERSION"));
             println!("Status: OK");
+            println!("Commands: chat, ask, gateway, status, init");
         }
 
         Commands::Init { provider, api_key } => {
@@ -124,8 +146,8 @@ async fn main() -> anyhow::Result<()> {
             cfg.provider.name = provider;
             cfg.provider.api_key = api_key;
             let json = serde_json::to_string_pretty(&cfg)?;
-            std::fs::write("subspace-rt.json", &json)?;
-            println!("✅ Created subspace-rt.json");
+            std::fs::write("aclaw.json", &json)?;
+            println!("✅ Created aclaw.json");
         }
     }
 

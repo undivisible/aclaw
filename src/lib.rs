@@ -1,20 +1,20 @@
-//! Subspace Runtime — Lightweight agent runtime
+//! aclaw — Lightweight agent runtime
+//! Successor to OpenClaw. Best-of-breed from ZeroClaw, NanoClaw, HiClaw.
 //!
-//! Architecture inspired by:
-//! - ZeroClaw: Trait-based pluggable providers, channels, tools, memory
-//! - NanoClaw: Container isolation for agent execution
-//! - HiClaw: Manager/Worker coordination pattern
+//! Core traits (all swappable):
+//! - `Provider` — LLM backend (Anthropic, OpenAI, Gemini, Ollama, OpenRouter, Groq)
+//! - `Channel` — Communication (CLI, Telegram, Discord, Matrix, WebSocket)
+//! - `Tool` — Agent capability (Shell, File I/O, Vibemania, custom)
+//! - `MemoryBackend` — Persistent state (SQLite, vector embeddings, file-based)
+//! - `RuntimeAdapter` — Execution (Native, Docker, WASM planned)
 //!
-//! Core traits:
-//! - `Provider` — LLM backend (OpenAI, Anthropic, Gemini, Ollama, etc.)
-//! - `Channel` — Communication interface (Telegram, Discord, CLI, WebSocket, etc.)
-//! - `Tool` — Agent capability (shell, file I/O, web, memory, etc.)
-//! - `MemoryBackend` — Persistent state (SQLite, vector, file-based)
-//! - `RuntimeAdapter` — Execution environment (native, Docker, WASM)
+//! Gateway — HTTP/WebSocket for remote management
+//! Embeddings — Vector search for semantic memory
 
 pub mod agent;
 pub mod channels;
 pub mod config;
+pub mod embeddings;
 pub mod gateway;
 pub mod memory;
 pub mod providers;

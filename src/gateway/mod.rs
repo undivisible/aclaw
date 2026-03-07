@@ -1,8 +1,6 @@
-//! Gateway — HTTP webhook server for incoming messages.
-//! Placeholder for future implementation.
+//! Gateway — HTTP/WebSocket server for remote agent management
+//! Allows external tools, editors, and clients to interact with agents
 
-// TODO: Implement HTTP gateway for webhook-based channels
-// - POST /webhook/{channel} — receive incoming messages
-// - GET /status — runtime status
-// - POST /api/chat — direct API access
-// - WebSocket /ws — real-time streaming
+pub mod server;
+
+pub use server::{Gateway, ChatRequest, ChatResponse, ContainerStatus, start_gateway};
