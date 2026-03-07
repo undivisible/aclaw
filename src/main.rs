@@ -312,9 +312,29 @@ fn build_provider(cfg: &Config) -> Arc<dyn Provider> {
             }
             Arc::new(p)
         }
+        "github-copilot" | "copilot" => {
+            if let Ok(p) = aclaw::providers::copilot::CopilotProvider::from_openclaw() {
+                Arc::new(p)
+            } else {
+                Arc::new(aclaw::providers::copilot::CopilotProvider::new(&api_key))
+            }
+        }
         "openai" => Arc::new(OpenAiCompatProvider::openai(&api_key)),
         "openrouter" => Arc::new(OpenAiCompatProvider::openrouter(&api_key)),
         "groq" => Arc::new(OpenAiCompatProvider::groq(&api_key)),
+        "together" => Arc::new(OpenAiCompatProvider::together(&api_key)),
+        "mistral" => Arc::new(OpenAiCompatProvider::mistral(&api_key)),
+        "deepseek" => Arc::new(OpenAiCompatProvider::deepseek(&api_key)),
+        "fireworks" => Arc::new(OpenAiCompatProvider::fireworks(&api_key)),
+        "perplexity" => Arc::new(OpenAiCompatProvider::perplexity(&api_key)),
+        "xai" | "grok" => Arc::new(OpenAiCompatProvider::xai(&api_key)),
+        "moonshot" | "kimi" => Arc::new(OpenAiCompatProvider::moonshot(&api_key)),
+        "venice" => Arc::new(OpenAiCompatProvider::venice(&api_key)),
+        "huggingface" => Arc::new(OpenAiCompatProvider::huggingface(&api_key)),
+        "siliconflow" => Arc::new(OpenAiCompatProvider::siliconflow(&api_key)),
+        "cerebras" => Arc::new(OpenAiCompatProvider::cerebras(&api_key)),
+        "minimax" => Arc::new(OpenAiCompatProvider::minimax(&api_key)),
+        "vercel" => Arc::new(OpenAiCompatProvider::vercel(&api_key)),
         "ollama" => {
             let url = cfg.provider.base_url.clone().unwrap_or_else(|| "http://localhost:11434".into());
             Arc::new(OllamaProvider::new(url))

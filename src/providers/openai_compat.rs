@@ -36,6 +36,80 @@ impl OpenAiCompatProvider {
         Self::new(api_key, "https://api.groq.com/openai/v1", "groq")
     }
 
+    /// Together AI
+    pub fn together(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.together.xyz/v1", "together")
+    }
+
+    /// Mistral AI
+    pub fn mistral(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.mistral.ai/v1", "mistral")
+    }
+
+    /// DeepSeek
+    pub fn deepseek(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.deepseek.com/v1", "deepseek")
+    }
+
+    /// Fireworks AI
+    pub fn fireworks(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.fireworks.ai/inference/v1", "fireworks")
+    }
+
+    /// Perplexity AI
+    pub fn perplexity(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.perplexity.ai", "perplexity")
+    }
+
+    /// xAI (Grok)
+    pub fn xai(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.x.ai/v1", "xai")
+    }
+
+    /// Moonshot / Kimi
+    pub fn moonshot(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.moonshot.ai/v1", "moonshot")
+    }
+
+    /// Venice AI
+    pub fn venice(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.venice.ai/api/v1", "venice")
+    }
+
+    /// HuggingFace Inference
+    pub fn huggingface(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api-inference.huggingface.co/v1", "huggingface")
+    }
+
+    /// SiliconFlow
+    pub fn siliconflow(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.siliconflow.cn/v1", "siliconflow")
+    }
+
+    /// Cerebras
+    pub fn cerebras(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.cerebras.ai/v1", "cerebras")
+    }
+
+    /// MiniMax (Anthropic-compatible)
+    pub fn minimax(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://api.minimax.io/v1", "minimax")
+    }
+
+    /// Vercel AI Gateway
+    pub fn vercel(api_key: impl Into<String>) -> Self {
+        Self::new(api_key, "https://gateway.vercel.ai/v1", "vercel")
+    }
+
+    /// Cloudflare Workers AI
+    pub fn cloudflare(api_key: impl Into<String>, account_id: &str) -> Self {
+        Self::new(
+            api_key,
+            format!("https://api.cloudflare.com/client/v4/accounts/{}/ai/v1", account_id),
+            "cloudflare",
+        )
+    }
+
     fn build_tools_payload(&self, tools: &[ToolSpec]) -> Vec<Value> {
         tools.iter().map(|t| {
             serde_json::json!({
