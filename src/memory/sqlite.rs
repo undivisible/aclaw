@@ -22,14 +22,65 @@ impl SqliteMemory {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (namespace, key)
             );
+            CREATE TABLE IF NOT EXISTS embeddings (
+                namespace TEXT NOT NULL,
+                key TEXT NOT NULL,
+                vector BLOB NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (namespace, key),
+                FOREIGN KEY (namespace, key) REFERENCES memories(namespace, key) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_memories_ns ON memories(namespace);
-            CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);"
+            CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_embeddings_ns ON embeddings(namespace);"
         )?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
     pub fn in_memory() -> anyhow::Result<Self> {
         Self::new(":memory:")
+    }
+
+    /// Store an embedding vector for semantic search
+    pub fn store_embedding(&self, namespace: &str, key: &str, vector: &[f32], text: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let vector_bytes: Vec<u8> = vector
+            .iter()
+            .flat_map(|f| f.to_le_bytes().to_vec())
+            .collect();
+        
+        conn.execute(
+            "INSERT OR REPLACE INTO embeddings (namespace, key, vector, text) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![namespace, key, vector_bytes, text],
+        )?;
+        Ok(())
+    }
+
+    /// Get embedding for a key
+    pub fn recall_embedding(&self, namespace: &str, key: &str) -> anyhow::Result<Option<(Vec<f32>, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT vector, text FROM embeddings WHERE namespace = ?1 AND key = ?2"
+        )?;
+        
+        let result = stmt.query_row(rusqlite::params![namespace, key], |row| {
+            let vector_bytes: Vec<u8> = row.get(0)?;
+            let text: String = row.get(1)?;
+            
+            // Convert bytes back to f32 vector
+            let vector: Vec<f32> = vector_bytes
+                .chunks_exact(4)
+                .map(|chunk| {
+                    let arr = [chunk[0], chunk[1], chunk[2], chunk[3]];
+                    f32::from_le_bytes(arr)
+                })
+                .collect();
+            
+            Ok((vector, text))
+        }).ok();
+        
+        Ok(result)
     }
 }
 
