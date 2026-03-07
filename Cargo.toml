@@ -1,0 +1,61 @@
+[package]
+name = "subspace-runtime"
+version = "0.1.0"
+edition = "2024"
+description = "Lightweight agent runtime. Best of ZeroClaw, NanoClaw, HiClaw."
+license = "MIT"
+repository = "https://github.com/undivisible/subspace-runtime"
+
+[[bin]]
+name = "subspace-rt"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client (for providers)
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Database (SQLite for memory/state)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Channel support
+tokio-tungstenite = "0.26"
+
+# Container management
+bollard = "0.18"  # Docker API client
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Link-time optimization
+codegen-units = 1   # Single codegen unit for smaller binary
+strip = true        # Strip symbols
+panic = "abort"     # No unwind tables
