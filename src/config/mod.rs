@@ -47,7 +47,7 @@ impl Config {
                 api_key: None,
                 base_url: None,
             },
-            model: "claude-sonnet-4-5-20250514".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
             system_prompt: "You are a helpful AI assistant.".to_string(),
             workspace: PathBuf::from("."),
             runtime: RuntimeConfig {

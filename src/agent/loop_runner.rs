@@ -36,7 +36,7 @@ pub struct AgentRunner {
     tools: Vec<Arc<dyn Tool>>,
     memory: Arc<dyn MemoryBackend>,
     system_prompt: String,
-    model: String,
+    model: std::sync::RwLock<String>,
     workspace: PathBuf,
     skills: Vec<skills::Skill>,
 }
@@ -54,7 +54,7 @@ impl AgentRunner {
             tools,
             memory,
             system_prompt: system_prompt.into(),
-            model: model.into(),
+            model: std::sync::RwLock::new(model.into()),
             workspace: PathBuf::from("."),
             skills: Vec::new(),
         }
@@ -68,6 +68,21 @@ impl AgentRunner {
     pub fn with_skills(mut self, skills: Vec<skills::Skill>) -> Self {
         self.skills = skills;
         self
+    }
+
+    /// Get current model name
+    pub fn get_model(&self) -> String {
+        self.model.read().unwrap().clone()
+    }
+
+    /// Switch model at runtime
+    pub fn set_model(&self, model: impl Into<String>) {
+        *self.model.write().unwrap() = model.into();
+    }
+
+    /// List available tools
+    pub fn list_tools(&self) -> Vec<String> {
+        self.tools.iter().map(|t| t.name().to_string()).collect()
     }
 
     /// Run the agent loop on a channel.
@@ -217,7 +232,7 @@ impl AgentRunner {
             let request = ChatRequest {
                 messages: messages.clone(),
                 tools: if tool_specs.is_empty() { None } else { Some(tool_specs.clone()) },
-                model: self.model.clone(),
+                model: self.model.read().unwrap().clone(),
                 temperature: 0.7,
                 max_tokens: None,
             };

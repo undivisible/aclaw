@@ -20,6 +20,7 @@ use unthinkclaw::gateway;
 use unthinkclaw::heartbeat::{self, HeartbeatConfig};
 use unthinkclaw::memory::search::{MemorySearchTool, MemoryGetTool};
 use unthinkclaw::memory::sqlite::SqliteMemory;
+use unthinkclaw::memory::MemoryBackend;
 use unthinkclaw::prompt;
 use unthinkclaw::skills;
 #[cfg(feature = "provider-anthropic")]
@@ -217,11 +218,12 @@ async fn main() -> anyhow::Result<()> {
                 Arc::new(FileWriteTool::new(workspace.clone())),
                 Arc::new(MemorySearchTool::new(workspace.clone())),
                 Arc::new(MemoryGetTool::new(workspace.clone())),
+                Arc::new(unthinkclaw::tools::web_search::WebSearchTool::new()),
             ];
 
-            let runner = AgentRunner::new(provider, tools, memory, &system_prompt, model)
+            let runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
                 .with_workspace(workspace.clone())
-                .with_skills(discovered_skills);
+                .with_skills(discovered_skills.clone());
 
             // Start cron scheduler background task
             let cron_db_path = workspace.join(".unthinkclaw/cron.db");
@@ -258,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
 
                     println!("unthinkclaw — {} via Telegram", cfg.model);
                     println!("   Chat ID: {}", chat_id);
+                    println!("   Tools: {}", runner.list_tools().join(", "));
                     println!("   Listening for messages...");
 
                     let tg = TelegramChannel::new(token.clone(), chat_id);
@@ -265,9 +268,103 @@ async fn main() -> anyhow::Result<()> {
                     let mut rx = ch.start().await?;
 
                     while let Some(msg) = rx.recv().await {
+                        let text = msg.text.trim();
+
+                        // Handle slash commands
+                        if text.starts_with('/') {
+                            let parts: Vec<&str> = text.splitn(2, ' ').collect();
+                            let cmd = parts[0].to_lowercase();
+                            let arg = parts.get(1).map(|s| s.trim()).unwrap_or("");
+
+                            match cmd.as_str() {
+                                "/help" => {
+                                    let _ = tg.send_message(
+                                        "🐾 *unthinkclaw commands:*\n\n\
+                                        /help — Show this message\n\
+                                        /model — Show current model\n\
+                                        /model <name> — Switch model\n\
+                                        /models — List available models\n\
+                                        /tools — List available tools\n\
+                                        /status — Bot status\n\
+                                        /reset — Clear conversation history\n\n\
+                                        Everything else is sent to the AI."
+                                    ).await;
+                                    continue;
+                                }
+                                "/model" | "/model@unthinkclaw_bot" => {
+                                    if arg.is_empty() {
+                                        let _ = tg.send_message(&format!(
+                                            "Current model: `{}`\n\nUse `/model <name>` to switch.\nUse `/models` for available options.",
+                                            runner.get_model()
+                                        )).await;
+                                    } else {
+                                        runner.set_model(arg);
+                                        let _ = tg.send_message(&format!("✅ Model switched to: `{}`", arg)).await;
+                                        tracing::info!("Model switched to: {}", arg);
+                                    }
+                                    continue;
+                                }
+                                "/models" => {
+                                    let _ = tg.send_message(
+                                        "📋 *Available models:*\n\n\
+                                        `claude-sonnet-4-5` — Fast, smart (default)\n\
+                                        `claude-opus-4` — Most capable\n\
+                                        `claude-haiku-3-5` — Fastest, cheapest\n\n\
+                                        Switch with: `/model claude-opus-4`"
+                                    ).await;
+                                    continue;
+                                }
+                                "/tools" => {
+                                    let tool_list = runner.list_tools();
+                                    let formatted = tool_list.iter()
+                                        .map(|t| format!("• `{}`", t))
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    let _ = tg.send_message(&format!(
+                                        "🔧 *Available tools ({}):\n\n{}*",
+                                        tool_list.len(), formatted
+                                    )).await;
+                                    continue;
+                                }
+                                "/status" => {
+                                    let _ = tg.send_message(&format!(
+                                        "🐾 *unthinkclaw status:*\n\n\
+                                        Model: `{}`\n\
+                                        Tools: {}\n\
+                                        Skills: {}\n\
+                                        Channel: Telegram\n\
+                                        PID: {}",
+                                        runner.get_model(),
+                                        runner.list_tools().len(),
+                                        discovered_skills.len(),
+                                        std::process::id(),
+                                    )).await;
+                                    continue;
+                                }
+                                "/reset" => {
+                                    // Clear conversation history from SQLite
+                                    let _ = memory.forget("chat", &format!("conv_{}", msg.chat_id)).await;
+                                    let _ = tg.send_message("🗑 Conversation history cleared.").await;
+                                    continue;
+                                }
+                                "/start" => {
+                                    let _ = tg.send_message(
+                                        "🐾 *unthinkclaw* — AI assistant\n\n\
+                                        Just type a message to chat.\n\
+                                        Use /help for commands.\n\
+                                        Use /tools to see what I can do."
+                                    ).await;
+                                    continue;
+                                }
+                                _ => {
+                                    // Unknown command — pass to AI
+                                }
+                            }
+                        }
+
                         // Send "thinking..." progress message
                         let _ = tg.send_typing().await;
-                        let progress_msg_id = tg.send_message("⏳ thinking...").await.unwrap_or(0);
+                        let progress_msg_id = tg.send_message("⏳").await.unwrap_or(0);
 
                         // Create progress channel
                         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(32);
@@ -278,16 +375,15 @@ async fn main() -> anyhow::Result<()> {
                             while let Some(update) = progress_rx.recv().await {
                                 use unthinkclaw::agent::loop_runner::ProgressUpdate;
                                 let status_text = match update {
-                                    ProgressUpdate::Thinking => "⏳ thinking...".to_string(),
+                                    ProgressUpdate::Thinking => "⏳".to_string(),
                                     ProgressUpdate::ToolCall { name, round } => {
-                                        format!("🔧 Running: {} (round {})...", name, round)
+                                        format!("🔧 {} ({})", name, round)
                                     }
                                     ProgressUpdate::Processing { round, tool_count } => {
                                         if round == 0 || tool_count == 0 {
-                                            // Done signal
                                             break;
                                         }
-                                        format!("🤔 Processing... (round {}, {} tools)", round, tool_count)
+                                        format!("🤔 round {} ({} tools)", round, tool_count)
                                     }
                                 };
                                 
@@ -300,7 +396,6 @@ async fn main() -> anyhow::Result<()> {
                         // Process message
                         match runner.handle_message_pub(&msg, Some(&progress_tx)).await {
                             Ok(response) => {
-                                // Signal done to progress task
                                 let _ = progress_tx.send(unthinkclaw::agent::loop_runner::ProgressUpdate::Processing {
                                     round: 0,
                                     tool_count: 0,
@@ -320,7 +415,7 @@ async fn main() -> anyhow::Result<()> {
                                 let _ = progress_task.await;
                                 
                                 if progress_msg_id > 0 {
-                                    let _ = tg.edit_message(progress_msg_id, &format!("❌ Error: {}", e)).await;
+                                    let _ = tg.edit_message(progress_msg_id, &format!("❌ {}", e)).await;
                                 }
                             }
                         }

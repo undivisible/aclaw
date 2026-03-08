@@ -3,6 +3,7 @@
 pub mod traits;
 pub mod shell;
 pub mod file_ops;
+pub mod web_search;
 pub mod vibemania;
 
 pub use traits::{Tool, ToolSpec, ToolResult};
