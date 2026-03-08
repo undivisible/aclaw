@@ -269,9 +269,45 @@ async fn main() -> anyhow::Result<()> {
                         let _ = tg.send_typing().await;
                         let progress_msg_id = tg.send_message("⏳ thinking...").await.unwrap_or(0);
 
+                        // Create progress channel
+                        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(32);
+
+                        // Spawn progress update task
+                        let tg_progress = tg.clone();
+                        let progress_task = tokio::spawn(async move {
+                            while let Some(update) = progress_rx.recv().await {
+                                use unthinkclaw::agent::loop_runner::ProgressUpdate;
+                                let status_text = match update {
+                                    ProgressUpdate::Thinking => "⏳ thinking...".to_string(),
+                                    ProgressUpdate::ToolCall { name, round } => {
+                                        format!("🔧 Running: {} (round {})...", name, round)
+                                    }
+                                    ProgressUpdate::Processing { round, tool_count } => {
+                                        if round == 0 || tool_count == 0 {
+                                            // Done signal
+                                            break;
+                                        }
+                                        format!("🤔 Processing... (round {}, {} tools)", round, tool_count)
+                                    }
+                                };
+                                
+                                if progress_msg_id > 0 {
+                                    let _ = tg_progress.edit_message(progress_msg_id, &status_text).await;
+                                }
+                            }
+                        });
+
                         // Process message
-                        match runner.handle_message_pub(&msg, None).await {
+                        match runner.handle_message_pub(&msg, Some(&progress_tx)).await {
                             Ok(response) => {
+                                // Signal done to progress task
+                                let _ = progress_tx.send(unthinkclaw::agent::loop_runner::ProgressUpdate::Processing {
+                                    round: 0,
+                                    tool_count: 0,
+                                }).await;
+                                drop(progress_tx);
+                                let _ = progress_task.await;
+                                
                                 // Delete progress message
                                 if progress_msg_id > 0 {
                                     let _ = tg.delete_message(progress_msg_id).await;
@@ -280,6 +316,9 @@ async fn main() -> anyhow::Result<()> {
                                 let _ = tg.send_message(&response).await;
                             }
                             Err(e) => {
+                                drop(progress_tx);
+                                let _ = progress_task.await;
+                                
                                 if progress_msg_id > 0 {
                                     let _ = tg.edit_message(progress_msg_id, &format!("❌ Error: {}", e)).await;
                                 }

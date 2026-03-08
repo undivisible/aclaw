@@ -35,9 +35,36 @@ impl SqliteMemory {
                 PRIMARY KEY (namespace, key),
                 FOREIGN KEY (namespace, key) REFERENCES memories(namespace, key) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL,
+                sender_id TEXT,
+                sender_name TEXT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                metadata TEXT
+            );
+            CREATE TABLE IF NOT EXISTS files (
+                path TEXT PRIMARY KEY,
+                hash TEXT NOT NULL,
+                last_indexed TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                embedding BLOB,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(namespace, key, value);
             CREATE INDEX IF NOT EXISTS idx_memories_ns ON memories(namespace);
             CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_embeddings_ns ON embeddings(namespace);"
+            CREATE INDEX IF NOT EXISTS idx_embeddings_ns ON embeddings(namespace);
+            CREATE INDEX IF NOT EXISTS idx_conv_chat ON conversations(chat_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_path);"
         )?;
         Ok(Self { conn: Mutex::new(conn) })
     }
@@ -86,6 +113,99 @@ impl SqliteMemory {
         
         Ok(result)
     }
+
+    /// Store a conversation message
+    pub fn store_conversation(
+        &self,
+        chat_id: &str,
+        sender_id: Option<&str>,
+        sender_name: Option<&str>,
+        role: &str,
+        content: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO conversations (chat_id, sender_id, sender_name, role, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![chat_id, sender_id, sender_name, role, content],
+        )?;
+        Ok(())
+    }
+
+    /// Get conversation history
+    pub fn get_conversation_history(&self, chat_id: &str, limit: usize) -> anyhow::Result<Vec<(String, String, String)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT role, content, timestamp FROM conversations WHERE chat_id = ?1 ORDER BY timestamp DESC LIMIT ?2"
+        )?;
+        let entries: Vec<(String, String, String)> = stmt.query_map(rusqlite::params![chat_id, limit], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(entries)
+    }
+
+    /// Store file hash for change detection
+    pub fn store_file_hash(&self, path: &str, hash: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO files (path, hash) VALUES (?1, ?2)",
+            rusqlite::params![path, hash],
+        )?;
+        Ok(())
+    }
+
+    /// Check if file has changed
+    pub fn check_file_changed(&self, path: &str, hash: &str) -> anyhow::Result<bool> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT hash FROM files WHERE path = ?1")?;
+        let result = stmt.query_row(rusqlite::params![path], |row| {
+            let stored_hash: String = row.get(0)?;
+            Ok(stored_hash != hash)
+        }).unwrap_or(true); // File doesn't exist in DB = changed
+        Ok(result)
+    }
+
+    /// Store a code chunk with optional embedding
+    pub fn store_chunk(
+        &self,
+        file_path: &str,
+        start_line: i32,
+        end_line: i32,
+        content: &str,
+        embedding: Option<&[f32]>,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock();
+        let embedding_bytes = embedding.map(|vec| {
+            vec.iter().flat_map(|f| f.to_le_bytes().to_vec()).collect::<Vec<u8>>()
+        });
+        conn.execute(
+            "INSERT INTO chunks (file_path, start_line, end_line, content, embedding) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![file_path, start_line, end_line, content, embedding_bytes],
+        )?;
+        Ok(())
+    }
+
+    /// Full-text search across memories
+    pub fn fts_search(&self, query: &str, limit: usize) -> anyhow::Result<Vec<(String, String, String)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT namespace, key, value FROM memory_fts WHERE memory_fts MATCH ?1 LIMIT ?2"
+        )?;
+        let entries: Vec<(String, String, String)> = stmt.query_map(rusqlite::params![query, limit], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(entries)
+    }
+
+    /// Sync memory to FTS index
+    pub fn sync_fts(&self) -> anyhow::Result<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM memory_fts", [])?;
+        conn.execute(
+            "INSERT INTO memory_fts (namespace, key, value) SELECT namespace, key, value FROM memories",
+            [],
+        )?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -96,6 +216,11 @@ impl MemoryBackend for SqliteMemory {
         conn.execute(
             "INSERT OR REPLACE INTO memories (namespace, key, value, metadata) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![namespace, key, value, meta_str],
+        )?;
+        // Sync to FTS index
+        conn.execute(
+            "INSERT OR REPLACE INTO memory_fts (namespace, key, value) VALUES (?1, ?2, ?3)",
+            rusqlite::params![namespace, key, value],
         )?;
         Ok(())
     }
@@ -136,6 +261,7 @@ impl MemoryBackend for SqliteMemory {
     async fn forget(&self, namespace: &str, key: &str) -> anyhow::Result<()> {
         let conn = self.conn.lock();
         conn.execute("DELETE FROM memories WHERE namespace = ?1 AND key = ?2", rusqlite::params![namespace, key])?;
+        conn.execute("DELETE FROM memory_fts WHERE namespace = ?1 AND key = ?2", rusqlite::params![namespace, key])?;
         Ok(())
     }
 
@@ -153,6 +279,28 @@ impl MemoryBackend for SqliteMemory {
             })
         })?.filter_map(|r| r.ok()).collect();
         Ok(entries)
+    }
+
+    async fn store_conversation(&self, chat_id: &str, sender_id: &str, role: &str, content: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO conversations (chat_id, sender_id, role, content) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![chat_id, sender_id, role, content],
+        )?;
+        Ok(())
+    }
+
+    async fn get_conversation_history(&self, chat_id: &str, limit: usize) -> anyhow::Result<Vec<(String, String)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT role, content FROM conversations WHERE chat_id = ?1 ORDER BY timestamp DESC LIMIT ?2"
+        )?;
+        let mut history: Vec<(String, String)> = stmt.query_map(rusqlite::params![chat_id, limit], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?.filter_map(|r| r.ok()).collect();
+        // Reverse to get chronological order (oldest first)
+        history.reverse();
+        Ok(history)
     }
 }
 

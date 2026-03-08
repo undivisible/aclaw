@@ -19,8 +19,6 @@ const CIRCUIT_BREAKER_ROUNDS: usize = 50;
 const LOOP_WARN_THRESHOLD: usize = 5;
 /// Hard stop after this many identical consecutive tool calls
 const LOOP_BREAK_THRESHOLD: usize = 10;
-/// Max conversation history to keep (prevents context overflow)
-const MAX_HISTORY_MESSAGES: usize = 40;
 
 /// Progress update sent during agent processing
 #[derive(Debug, Clone)]
@@ -41,8 +39,6 @@ pub struct AgentRunner {
     model: String,
     workspace: PathBuf,
     skills: Vec<skills::Skill>,
-    /// Conversation history (persisted across messages)
-    conversation_history: std::sync::Mutex<Vec<ChatMessage>>,
 }
 
 impl AgentRunner {
@@ -61,7 +57,6 @@ impl AgentRunner {
             model: model.into(),
             workspace: PathBuf::from("."),
             skills: Vec::new(),
-            conversation_history: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -196,11 +191,13 @@ impl AgentRunner {
             }
         }
 
-        // Add conversation history (keeps context across messages)
-        {
-            let history = self.conversation_history.lock().unwrap();
-            for msg in history.iter() {
-                messages.push(msg.clone());
+        // Load conversation history from SQLite
+        let history = self.memory.get_conversation_history(&msg.chat_id, 20).await?;
+        for (role, content) in history {
+            match role.as_str() {
+                "user" => messages.push(ChatMessage::user(&content)),
+                "assistant" => messages.push(ChatMessage::assistant(&content)),
+                _ => {} // Skip unknown roles
             }
         }
 
@@ -232,19 +229,21 @@ impl AgentRunner {
                 tracing::info!("Agent done after {} round(s)", round + 1);
                 let text = response.text.unwrap_or_default();
 
-                // Persist conversation history
-                self.add_to_history(
-                    ChatMessage::user(&msg.text),
-                    ChatMessage::assistant(&text),
-                );
+                // Store user message to SQLite
+                self.memory.store_conversation(
+                    &msg.chat_id,
+                    &msg.sender_id,
+                    "user",
+                    &msg.text,
+                ).await?;
 
-                // Store in SQLite memory
-                let _ = self.memory.store(
-                    "chat",
-                    &format!("msg_{}", msg.id),
-                    &format!("User: {} | Assistant: {}", msg.text, &text[..text.len().min(500)]),
-                    None,
-                ).await;
+                // Store assistant response to SQLite
+                self.memory.store_conversation(
+                    &msg.chat_id,
+                    "assistant",
+                    "assistant",
+                    &text,
+                ).await?;
 
                 return Ok(text);
             }
@@ -326,17 +325,5 @@ impl AgentRunner {
 
         tracing::error!("Circuit breaker: {} rounds without completion", CIRCUIT_BREAKER_ROUNDS);
         Ok("Hit the circuit breaker. Try rephrasing?".to_string())
-    }
-
-    /// Add user/assistant pair to conversation history, trimming to MAX_HISTORY
-    fn add_to_history(&self, user_msg: ChatMessage, assistant_msg: ChatMessage) {
-        let mut history = self.conversation_history.lock().unwrap();
-        history.push(user_msg);
-        history.push(assistant_msg);
-
-        // Trim oldest messages if too long
-        while history.len() > MAX_HISTORY_MESSAGES {
-            history.remove(0);
-        }
     }
 }

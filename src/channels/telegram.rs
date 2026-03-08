@@ -10,6 +10,9 @@ use tokio::sync::mpsc;
 
 use super::traits::{Channel, IncomingMessage, OutgoingMessage};
 
+/// Telegram message length limit
+const TELEGRAM_MAX_LEN: usize = 4096;
+
 #[derive(Clone)]
 pub struct TelegramChannel {
     bot_token: String,
@@ -24,12 +27,14 @@ struct TelegramResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct SendResult {
     ok: bool,
     result: Option<SentMessage>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct SentMessage {
     message_id: i64,
 }
@@ -62,6 +67,152 @@ struct User {
     username: Option<String>,
 }
 
+/// Sanitize Markdown for Telegram's strict parser
+fn sanitize_markdown(text: &str) -> String {
+    let mut result = text.to_string();
+    
+    // Convert pipe tables to bullet lists
+    if result.contains('|') {
+        let lines: Vec<&str> = result.lines().collect();
+        let mut sanitized_lines = Vec::new();
+        let mut in_table = false;
+        
+        for line in lines {
+            let trimmed = line.trim();
+            // Detect table rows (have pipes and aren't code)
+            if trimmed.contains('|') && !trimmed.starts_with("```") {
+                if !in_table {
+                    in_table = true;
+                }
+                // Convert row to bullet list
+                let cells: Vec<&str> = trimmed.split('|')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                    
+                // Skip separator rows (contain only - and |)
+                if cells.iter().all(|c| c.chars().all(|ch| ch == '-' || ch == ' ')) {
+                    continue;
+                }
+                
+                if !cells.is_empty() {
+                    sanitized_lines.push(format!("• {}", cells.join(" | ")));
+                }
+            } else {
+                if in_table && !trimmed.is_empty() {
+                    in_table = false;
+                }
+                sanitized_lines.push(line.to_string());
+            }
+        }
+        result = sanitized_lines.join("\n");
+    }
+    
+    // Ensure code blocks have language specifiers
+    result = result.replace("```\n", "```text\n");
+    
+    // Escape unmatched markdown characters (simple heuristic)
+    // Count * and _ to find unmatched pairs
+    let asterisk_count = result.matches('*').count();
+    let _underscore_count = result.matches('_').count();
+    
+    // If odd count outside code blocks, escape them
+    if asterisk_count % 2 != 0 {
+        // Find and escape unmatched * (skip code blocks)
+        let mut escaped = String::new();
+        let mut in_code = false;
+        let mut in_code_block = false;
+        
+        for (i, ch) in result.chars().enumerate() {
+            if ch == '`' {
+                let next_two: String = result.chars().skip(i).take(3).collect();
+                if next_two == "```" {
+                    in_code_block = !in_code_block;
+                } else if !in_code_block {
+                    in_code = !in_code;
+                }
+            }
+            
+            if ch == '*' && !in_code && !in_code_block {
+                // Check if it's part of a valid markdown pair
+                // For simplicity, escape if count is odd
+                escaped.push('\\');
+            }
+            escaped.push(ch);
+        }
+        result = escaped;
+    }
+    
+    result
+}
+
+/// Chunk message into pieces under max_len, splitting at paragraph/sentence boundaries
+fn chunk_message(text: &str, max_len: usize) -> Vec<String> {
+    if text.len() <= max_len {
+        return vec![text.to_string()];
+    }
+    
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    
+    // First, try splitting by paragraphs (double newline)
+    let paragraphs: Vec<&str> = text.split("\n\n").collect();
+    
+    for para in paragraphs {
+        // If adding this paragraph would exceed limit
+        if current.len() + para.len() + 2 > max_len {
+            // If current is not empty, save it
+            if !current.is_empty() {
+                chunks.push(current.clone());
+                current.clear();
+            }
+            
+            // If the paragraph itself is too long, split by sentences
+            if para.len() > max_len {
+                let sentences: Vec<&str> = para.split(". ").collect();
+                for (i, sent) in sentences.iter().enumerate() {
+                    let sentence = if i < sentences.len() - 1 {
+                        format!("{}. ", sent)
+                    } else {
+                        sent.to_string()
+                    };
+                    
+                    if current.len() + sentence.len() > max_len {
+                        if !current.is_empty() {
+                            chunks.push(current.clone());
+                            current.clear();
+                        }
+                        // If a single sentence is still too long, hard split
+                        if sentence.len() > max_len {
+                            for chunk in sentence.as_bytes().chunks(max_len) {
+                                chunks.push(String::from_utf8_lossy(chunk).to_string());
+                            }
+                        } else {
+                            current = sentence;
+                        }
+                    } else {
+                        current.push_str(&sentence);
+                    }
+                }
+            } else {
+                current = para.to_string();
+            }
+        } else {
+            if !current.is_empty() {
+                current.push_str("\n\n");
+            }
+            current.push_str(para);
+        }
+    }
+    
+    // Add remaining
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    
+    chunks
+}
+
 impl TelegramChannel {
     pub fn new(bot_token: String, chat_id: i64) -> Self {
         Self {
@@ -75,35 +226,53 @@ impl TelegramChannel {
         format!("https://api.telegram.org/bot{}/{}", self.bot_token, method)
     }
 
-    /// Send a message and return its message_id
+    /// Send a message and return its message_id (of the last chunk if split)
     pub async fn send_message(&self, text: &str) -> anyhow::Result<i64> {
-        let resp = self.client
-            .post(self.api_url("sendMessage"))
-            .json(&serde_json::json!({
-                "chat_id": self.chat_id,
-                "text": text,
-                "parse_mode": "Markdown",
-            }))
-            .send()
-            .await?;
+        // Sanitize markdown
+        let sanitized = sanitize_markdown(text);
+        
+        // Chunk if needed
+        let chunks = chunk_message(&sanitized, TELEGRAM_MAX_LEN);
+        
+        let mut last_msg_id = 0;
+        
+        for (i, chunk) in chunks.iter().enumerate() {
+            // Try with Markdown first
+            let resp = self.client
+                .post(self.api_url("sendMessage"))
+                .json(&serde_json::json!({
+                    "chat_id": self.chat_id,
+                    "text": chunk,
+                    "parse_mode": "Markdown",
+                }))
+                .send()
+                .await?;
 
-        // If Markdown fails, retry without parse_mode
-        let body: Value = resp.json().await?;
-        if body["ok"].as_bool() == Some(true) {
-            return Ok(body["result"]["message_id"].as_i64().unwrap_or(0));
+            let body: Value = resp.json().await?;
+            
+            if body["ok"].as_bool() == Some(true) {
+                last_msg_id = body["result"]["message_id"].as_i64().unwrap_or(0);
+            } else {
+                // Markdown failed, retry without parse_mode
+                let resp = self.client
+                    .post(self.api_url("sendMessage"))
+                    .json(&serde_json::json!({
+                        "chat_id": self.chat_id,
+                        "text": chunk,
+                    }))
+                    .send()
+                    .await?;
+                let body: Value = resp.json().await?;
+                last_msg_id = body["result"]["message_id"].as_i64().unwrap_or(0);
+            }
+            
+            // Add delay between chunks to avoid rate limiting
+            if i < chunks.len() - 1 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
         }
-
-        // Retry without markdown
-        let resp = self.client
-            .post(self.api_url("sendMessage"))
-            .json(&serde_json::json!({
-                "chat_id": self.chat_id,
-                "text": text,
-            }))
-            .send()
-            .await?;
-        let body: Value = resp.json().await?;
-        Ok(body["result"]["message_id"].as_i64().unwrap_or(0))
+        
+        Ok(last_msg_id)
     }
 
     /// Edit an existing message

@@ -29,4 +29,10 @@ pub trait MemoryBackend: Send + Sync {
 
     /// List all memories in a namespace
     async fn list(&self, namespace: &str) -> anyhow::Result<Vec<MemoryEntry>>;
+
+    /// Store a conversation message
+    async fn store_conversation(&self, chat_id: &str, sender_id: &str, role: &str, content: &str) -> anyhow::Result<()>;
+
+    /// Get recent conversation history (returns role, content pairs)
+    async fn get_conversation_history(&self, chat_id: &str, limit: usize) -> anyhow::Result<Vec<(String, String)>>;
 }
