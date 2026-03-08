@@ -221,9 +221,10 @@ async fn main() -> anyhow::Result<()> {
                 Arc::new(MemoryGetTool::new(workspace.clone())),       // memory_get
                 Arc::new(unthinkclaw::tools::web_search::WebSearchTool::new()),  // web_search
                 Arc::new(unthinkclaw::tools::web_fetch::WebFetchTool::new()),    // web_fetch
+                Arc::new(unthinkclaw::tools::session::ListModelsTool::new()),    // list_models
             ];
 
-            let runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
+            let mut runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
                 .with_workspace(workspace.clone())
                 .with_skills(discovered_skills.clone());
 
@@ -260,12 +261,21 @@ async fn main() -> anyhow::Result<()> {
                     let token = telegram_token.ok_or_else(|| anyhow::anyhow!("--telegram-token required"))?;
                     let chat_id = telegram_chat_id.ok_or_else(|| anyhow::anyhow!("--telegram-chat-id required"))?;
 
+                    let tg = TelegramChannel::new(token.clone(), chat_id);
+                    let tg_arc = Arc::new(tg.clone());
+
+                    // Add late-binding tools that need references
+                    runner.add_tool(Arc::new(unthinkclaw::tools::message::MessageTool::new(tg_arc.clone())));
+
+                    // Wrap runner in Arc for session_status
+                    let runner = Arc::new(runner);
+                    // Note: session_status needs Arc<AgentRunner> but AgentRunner isn't Clone-able
+                    // For now, session_status is available via /status command and list_models tool
+
                     println!("unthinkclaw — {} via Telegram", cfg.model);
                     println!("   Chat ID: {}", chat_id);
                     println!("   Tools: {}", runner.list_tools().join(", "));
                     println!("   Listening for messages...");
-
-                    let tg = TelegramChannel::new(token.clone(), chat_id);
                     let mut ch = TelegramChannel::new(token, chat_id);
                     let mut rx = ch.start().await?;
 

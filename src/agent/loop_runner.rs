@@ -85,6 +85,11 @@ impl AgentRunner {
         self.tools.iter().map(|t| t.name().to_string()).collect()
     }
 
+    /// Add a tool at runtime (for late-binding tools like session_status)
+    pub fn add_tool(&mut self, tool: Arc<dyn Tool>) {
+        self.tools.push(tool);
+    }
+
     /// Run the agent loop on a channel.
     pub async fn run(&self, channel: &mut dyn Channel) -> anyhow::Result<()> {
         let mut rx = channel.start().await?;
