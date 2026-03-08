@@ -1,4 +1,4 @@
-# aclaw: Complete Production Release
+# unthinkclaw: Complete Production Release
 
 **Date**: 2026-03-07  
 **Version**: 1.0.0  
@@ -7,9 +7,9 @@
 
 ---
 
-## What Is aclaw?
+## What Is unthinkclaw?
 
-**aclaw** is a lightweight, feature-complete agent runtime that combines the best of three existing systems (ZeroClaw, NanoClaw, HiClaw) plus unique innovations that none of them have.
+**unthinkclaw** is a lightweight, feature-complete agent runtime that combines the best of three existing systems (ZeroClaw, NanoClaw, HiClaw) plus unique innovations that none of them have.
 
 - **Successor to**: OpenClaw (broken ACP), ZeroClaw, NanoClaw, HiClaw
 - **Language**: Rust (safe, fast, tiny)
@@ -151,10 +151,10 @@
 ## Comparison with Alternatives
 
 ### vs. ZeroClaw (73K LOC, Rust)
-**Advantages (aclaw)**:
-- Vector embeddings ✨ (only aclaw)
-- Plugin system ✨ (only aclaw)
-- Streaming responses ✨ (only aclaw)
+**Advantages (unthinkclaw)**:
+- Vector embeddings ✨ (only unthinkclaw)
+- Plugin system ✨ (only unthinkclaw)
+- Streaming responses ✨ (only unthinkclaw)
 - 6 providers vs. 4
 - Better gateway API (15 vs. 8 endpoints)
 - Claw migration adapter (exclusive)
@@ -163,38 +163,38 @@
 - Fewer channels (4 vs. 7)
 - Fewer tools (4 vs. 8+)
 
-**Verdict**: aclaw is more advanced (AI features), ZeroClaw is more complete (channels/tools).
+**Verdict**: unthinkclaw is more advanced (AI features), ZeroClaw is more complete (channels/tools).
 
 ### vs. NanoClaw (TypeScript, containers)
-**Advantages (aclaw)**:
+**Advantages (unthinkclaw)**:
 - 100x faster startup (<10ms vs. 500ms) ✨
 - 4.2MB binary (TypeScript is much larger)
 - 6 providers vs. 3
-- Vector embeddings ✨ (only aclaw)
-- Plugin system ✨ (only aclaw)
-- Streaming ✨ (only aclaw)
+- Vector embeddings ✨ (only unthinkclaw)
+- Plugin system ✨ (only unthinkclaw)
+- Streaming ✨ (only unthinkclaw)
 - Claw migration adapter
 
 **Disadvantages**:
 - Weaker container security (NanoClaw has IPC auth)
 - Fewer channels (4 vs. 5)
 
-**Verdict**: aclaw is lighter, faster, more feature-rich. NanoClaw is more secure for multi-tenant.
+**Verdict**: unthinkclaw is lighter, faster, more feature-rich. NanoClaw is more secure for multi-tenant.
 
 ### vs. HiClaw (Docker Compose, distributed)
-**Advantages (aclaw)**:
+**Advantages (unthinkclaw)**:
 - Standalone (no Compose needed)
 - 6 providers vs. 2
-- Vector embeddings ✨ (only aclaw)
-- Plugin system ✨ (only aclaw)
-- Streaming ✨ (only aclaw)
+- Vector embeddings ✨ (only unthinkclaw)
+- Plugin system ✨ (only unthinkclaw)
+- Streaming ✨ (only unthinkclaw)
 - Simpler deployment
 
 **Disadvantages**:
 - Single-machine (HiClaw is distributed)
 - Fewer team features (HiClaw team-native)
 
-**Verdict**: aclaw is simpler, lighter. HiClaw is for teams.
+**Verdict**: unthinkclaw is simpler, lighter. HiClaw is for teams.
 
 ---
 
@@ -240,37 +240,37 @@
 ### Option 1: Direct Binary (Simplest)
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-./aclaw chat
+./unthinkclaw chat
 ```
 
 ### Option 2: Docker
 ```bash
 docker run -e ANTHROPIC_API_KEY=sk-ant-... \
-  undivisible/aclaw:latest chat
+  undivisible/unthinkclaw:latest chat
 ```
 
 ### Option 3: Kubernetes (Scale)
 ```bash
-kubectl apply -f aclaw-deployment.yaml
+kubectl apply -f unthinkclaw-deployment.yaml
 ```
 
 ### Telegram Bot
 ```bash
-./aclaw chat --channel telegram \
+./unthinkclaw chat --channel telegram \
   --telegram-token YOUR_BOT_TOKEN \
   --telegram-chat-id 123456789
 ```
 
 ### Discord Bot
 ```bash
-./aclaw chat --channel discord \
+./unthinkclaw chat --channel discord \
   --discord-token YOUR_BOT_TOKEN \
   --discord-channel-id 987654321
 ```
 
 ### HTTP Gateway (All Features)
 ```bash
-./aclaw gateway --addr 0.0.0.0:8080
+./unthinkclaw gateway --addr 0.0.0.0:8080
 
 # Then:
 curl http://localhost:8080/api/chat/default -X POST \
@@ -335,8 +335,8 @@ curl -X POST http://localhost:8080/api/schedule \
 
 ## Repositories
 
-1. **undivisible/aclaw** — Runtime (this project)
-   - Binary: `./target/release/aclaw`
+1. **undivisible/unthinkclaw** — Runtime (this project)
+   - Binary: `./target/release/unthinkclaw`
    - All source code, tests, docs
    - Production-ready
 
@@ -354,8 +354,8 @@ curl -X POST http://localhost:8080/api/schedule \
 
 ### Immediate (Deploy Now)
 1. Set ANTHROPIC_API_KEY
-2. Run `./aclaw chat`
-3. Start gateway: `./aclaw gateway --addr :8080`
+2. Run `./unthinkclaw chat`
+3. Start gateway: `./unthinkclaw gateway --addr :8080`
 4. Test cost tracking: `curl http://localhost:8080/api/cost/summary`
 5. Test cron: `curl -X POST http://localhost:8080/api/schedule ...`
 
@@ -381,7 +381,7 @@ curl -X POST http://localhost:8080/api/schedule \
 
 ## Summary
 
-**aclaw 1.0** is production-ready with:
+**unthinkclaw 1.0** is production-ready with:
 - ✨ Best-in-class AI features (embeddings, plugins, streaming)
 - ✨ Complete security audit (OWASP, CWE, threat model)
 - ✨ Lightweight binary (4.2MB, <10ms startup)

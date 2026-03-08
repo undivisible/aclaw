@@ -1,4 +1,4 @@
-# aclaw Features Guide
+# unthinkclaw Features Guide
 
 ## Quick Start
 

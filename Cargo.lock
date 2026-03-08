@@ -3,37 +3,6 @@
 version = 4
 
 [[package]]
-name = "aclaw"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "async-trait",
- "axum",
- "bollard",
- "chrono",
- "clap",
- "cron",
- "dirs",
- "futures-util",
- "parking_lot",
- "rand 0.8.5",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "shlex",
- "tempfile",
- "tokio",
- "tokio-test",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2335,6 +2304,37 @@ checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
  "crypto-common",
  "subtle",
+]
+
+[[package]]
+name = "unthinkclaw"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bollard",
+ "chrono",
+ "clap",
+ "cron",
+ "dirs",
+ "futures-util",
+ "parking_lot",
+ "rand 0.8.5",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shlex",
+ "tempfile",
+ "tokio",
+ "tokio-test",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

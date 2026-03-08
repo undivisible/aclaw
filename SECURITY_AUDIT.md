@@ -1,4 +1,4 @@
-# aclaw Security Audit
+# unthinkclaw Security Audit
 
 **Date**: 2026-03-07 19:00 GMT+11  
 **Scope**: Phase 4 additions + comprehensive security review  
@@ -311,7 +311,7 @@ cargo test -- --test-threads=1  # Concurrent safety
 
 **Status**: ✅ **PRODUCTION-SECURE**
 
-aclaw meets or exceeds security standards for:
+unthinkclaw meets or exceeds security standards for:
 - ✅ A startup or SMB AI system
 - ✅ Multi-tenant containerized deployment
 - ✅ Compliance-sensitive environments (SOC 2 ready)

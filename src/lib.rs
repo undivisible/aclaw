@@ -1,4 +1,4 @@
-//! aclaw — Lightweight agent runtime
+//! unthinkclaw — Lightweight agent runtime
 //! Successor to OpenClaw. Best-of-breed from ZeroClaw, NanoClaw, HiClaw.
 //!
 //! Core traits (all swappable):

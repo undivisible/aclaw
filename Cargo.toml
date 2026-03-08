@@ -1,13 +1,13 @@
 [package]
-name = "aclaw"
+name = "unthinkclaw"
 version = "0.1.0"
 edition = "2021"
-description = "Lightweight agent runtime — successor to OpenClaw. Best of ZeroClaw, NanoClaw, HiClaw."
+description = "Lightweight agent runtime — unthink everything."
 license = "MIT"
-repository = "https://github.com/undivisible/aclaw"
+repository = "https://github.com/undivisible/unthinkclaw"
 
 [[bin]]
-name = "aclaw"
+name = "unthinkclaw"
 path = "src/main.rs"
 
 [features]

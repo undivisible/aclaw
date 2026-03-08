@@ -1,4 +1,4 @@
-# aclaw — Lightweight Agent Runtime
+# unthinkclaw — Lightweight Agent Runtime
 
 **Successor to OpenClaw.** Best-of-breed from ZeroClaw, NanoClaw, HiClaw.
 
@@ -15,17 +15,17 @@
 ### Install
 
 ```bash
-git clone https://github.com/undivisible/aclaw.git
-cd aclaw
+git clone https://github.com/undivisible/unthinkclaw.git
+cd unthinkclaw
 cargo build --release
-./target/release/aclaw --version
+./target/release/unthinkclaw --version
 ```
 
 ### Chat (Interactive)
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-./aclaw chat
+./unthinkclaw chat
 # Type: Hello, what can you do?
 # Type: /quit to exit
 ```
@@ -33,13 +33,13 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 ### Ask (One-shot)
 
 ```bash
-./aclaw ask "What's in this directory?" --model claude-opus-4-6
+./unthinkclaw ask "What's in this directory?" --model claude-opus-4-6
 ```
 
 ### Gateway (HTTP Server)
 
 ```bash
-./aclaw gateway --addr 0.0.0.0:8080
+./unthinkclaw gateway --addr 0.0.0.0:8080
 
 # In another terminal:
 curl http://localhost:8080/api/chat/default \
@@ -54,15 +54,15 @@ wscat -c ws://localhost:8080/ws
 ### Init (Setup Config)
 
 ```bash
-./aclaw init --provider anthropic --api-key sk-ant-...
-# Creates: aclaw.json
+./unthinkclaw init --provider anthropic --api-key sk-ant-...
+# Creates: unthinkclaw.json
 ```
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────┐
-│ aclaw — Lightweight Agent Runtime       │
+│ unthinkclaw — Lightweight Agent Runtime       │
 ├─────────────────────────────────────────┤
 │                                         │
 │ ┌──────────────────────────────────┐  │
@@ -152,7 +152,7 @@ wscat -c ws://localhost:8080/ws
 
 ## Configuration
 
-Create `aclaw.json`:
+Create `unthinkclaw.json`:
 
 ```json
 {
@@ -172,31 +172,31 @@ Or use environment variables:
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..." (if using OpenAI instead)
-./aclaw chat
+./unthinkclaw chat
 ```
 
 ## Commands
 
 ```bash
 # Chat mode
-./aclaw chat [--config aclaw.json] [--model MODEL] [--workspace PATH]
+./unthinkclaw chat [--config unthinkclaw.json] [--model MODEL] [--workspace PATH]
 
 # One-shot query
-./aclaw ask "question" [--config aclaw.json] [--model MODEL]
+./unthinkclaw ask "question" [--config unthinkclaw.json] [--model MODEL]
 
 # Start HTTP/WebSocket gateway
-./aclaw gateway [--addr 0.0.0.0:8080] [--config aclaw.json]
+./unthinkclaw gateway [--addr 0.0.0.0:8080] [--config unthinkclaw.json]
 
 # Check status
-./aclaw status
+./unthinkclaw status
 
 # Initialize config
-./aclaw init [--provider anthropic] [--api-key sk-ant-...]
+./unthinkclaw init [--provider anthropic] [--api-key sk-ant-...]
 ```
 
 ## Compared to Old OpenClaw
 
-| Feature | Old OpenClaw | aclaw |
+| Feature | Old OpenClaw | unthinkclaw |
 |---------|---|---|
 | **Runtime** | Node.js + ACP | Rust (4.2MB) |
 | **Agent backend** | ACP (broken) | Pluggable traits |
@@ -225,7 +225,7 @@ cargo test
 
 - `ARCHITECTURE.md` — Trait system, agent loop, tool execution
 - `INTEGRATION.md` — Step-by-step integration guide
-- `OVERVIEW.md` — How aclaw fits with Vibemania and subspace-editor
+- `OVERVIEW.md` — How unthinkclaw fits with Vibemania and subspace-editor
 
 ## Roadmap
 

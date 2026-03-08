@@ -1,4 +1,4 @@
-//! aclaw — Lightweight agent runtime CLI
+//! unthinkclaw — Lightweight agent runtime CLI
 //! Successor to OpenClaw. Best-of-breed from ZeroClaw, NanoClaw, HiClaw.
 
 use std::path::PathBuf;
@@ -6,25 +6,25 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-use aclaw::agent::AgentRunner;
+use unthinkclaw::agent::AgentRunner;
 #[cfg(feature = "channel-cli")]
-use aclaw::channels::cli::CliChannel;
+use unthinkclaw::channels::cli::CliChannel;
 #[cfg(feature = "channel-telegram")]
-use aclaw::channels::telegram::TelegramChannel;
+use unthinkclaw::channels::telegram::TelegramChannel;
 #[cfg(feature = "channel-discord")]
-use aclaw::channels::discord::DiscordChannel;
-use aclaw::config::Config;
-use aclaw::gateway;
-use aclaw::memory::sqlite::SqliteMemory;
+use unthinkclaw::channels::discord::DiscordChannel;
+use unthinkclaw::config::Config;
+use unthinkclaw::gateway;
+use unthinkclaw::memory::sqlite::SqliteMemory;
 #[cfg(feature = "provider-anthropic")]
-use aclaw::providers::anthropic::AnthropicProvider;
+use unthinkclaw::providers::anthropic::AnthropicProvider;
 #[cfg(feature = "provider-ollama")]
-use aclaw::providers::ollama::OllamaProvider;
-use aclaw::providers::openai_compat::OpenAiCompatProvider;
-use aclaw::providers::Provider;
-use aclaw::tools::file_ops::{FileReadTool, FileWriteTool};
-use aclaw::tools::shell::ShellTool;
-use aclaw::tools::Tool;
+use unthinkclaw::providers::ollama::OllamaProvider;
+use unthinkclaw::providers::openai_compat::OpenAiCompatProvider;
+use unthinkclaw::providers::Provider;
+use unthinkclaw::tools::file_ops::{FileReadTool, FileWriteTool};
+use unthinkclaw::tools::shell::ShellTool;
+use unthinkclaw::tools::Tool;
 
 #[derive(Parser)]
 #[command(name = "aclaw", about = "Lightweight agent runtime — successor to OpenClaw", version)]
@@ -38,7 +38,7 @@ enum Commands {
     /// Start interactive agent chat
     Chat {
         /// Configuration file path
-        #[arg(short, long, default_value = "aclaw.json")]
+        #[arg(short, long, default_value = "unthinkclaw.json")]
         config: String,
 
         /// Override the model
@@ -76,7 +76,7 @@ enum Commands {
         message: String,
 
         /// Configuration file path
-        #[arg(short, long, default_value = "aclaw.json")]
+        #[arg(short, long, default_value = "unthinkclaw.json")]
         config: String,
 
         /// Override the model
@@ -91,7 +91,7 @@ enum Commands {
         addr: String,
 
         /// Configuration file path
-        #[arg(short, long, default_value = "aclaw.json")]
+        #[arg(short, long, default_value = "unthinkclaw.json")]
         config: String,
     },
 
@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
 
             let provider = build_provider(&cfg);
             let memory = Arc::new(SqliteMemory::new(
-                &workspace.join(".aclaw/memory.db").to_string_lossy(),
+                &workspace.join(".unthinkclaw/memory.db").to_string_lossy(),
             )?);
 
             let tools: Vec<Arc<dyn Tool>> = vec![
@@ -149,7 +149,7 @@ async fn main() -> anyhow::Result<()> {
             match channel.as_str() {
                 #[cfg(feature = "channel-cli")]
                 "cli" => {
-                    println!("🚀 aclaw — {} via {}", cfg.model, cfg.provider.name);
+                    println!("🚀 unthinkclaw — {} via {}", cfg.model, cfg.provider.name);
                     println!("   Workspace: {}", workspace.display());
                     println!("   Channel: CLI");
                     println!("   Type /quit to exit\n");
@@ -162,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
                     let token = telegram_token.ok_or_else(|| anyhow::anyhow!("--telegram-token required"))?;
                     let chat_id = telegram_chat_id.ok_or_else(|| anyhow::anyhow!("--telegram-chat-id required"))?;
 
-                    println!("🚀 aclaw — {} via Telegram", cfg.model);
+                    println!("🚀 unthinkclaw — {} via Telegram", cfg.model);
                     println!("   Chat ID: {}", chat_id);
                     println!("   Listening for messages...");
 
@@ -175,7 +175,7 @@ async fn main() -> anyhow::Result<()> {
                     let channel_id =
                         _discord_channel_id.ok_or_else(|| anyhow::anyhow!("--discord-channel-id required"))?;
 
-                    println!("🚀 aclaw — {} via Discord", cfg.model);
+                    println!("🚀 unthinkclaw — {} via Discord", cfg.model);
                     println!("   Channel ID: {}", channel_id);
                     println!("   Listening for messages...");
 
@@ -206,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Status => {
-            println!("aclaw v{}", env!("CARGO_PKG_VERSION"));
+            println!("unthinkclaw v{}", env!("CARGO_PKG_VERSION"));
             println!("Status: OK");
             println!("Commands: chat, ask, gateway, status, init");
         }
@@ -216,8 +216,8 @@ async fn main() -> anyhow::Result<()> {
             cfg.provider.name = provider;
             cfg.provider.api_key = api_key;
             let json = serde_json::to_string_pretty(&cfg)?;
-            std::fs::write("aclaw.json", &json)?;
-            println!("✅ Created aclaw.json");
+            std::fs::write("unthinkclaw.json", &json)?;
+            println!("✅ Created unthinkclaw.json");
         }
     }
 
@@ -241,10 +241,10 @@ fn load_config(path: &str) -> Config {
         } 
         #[cfg(feature = "provider-anthropic")]
         {
-            if let Ok(_provider) = aclaw::providers::anthropic::AnthropicProvider::from_env_or_oauth() {
+            if let Ok(_provider) = unthinkclaw::providers::anthropic::AnthropicProvider::from_env_or_oauth() {
                 // Fallback to Claude.dev credentials file
                 let _ = _provider; // Just checking it exists
-                if let Ok((token, _, _)) = aclaw::providers::oauth::load_oauth_token_from_file() {
+                if let Ok((token, _, _)) = unthinkclaw::providers::oauth::load_oauth_token_from_file() {
                     cfg.provider.api_key = Some(token);
                     cfg.model = "claude-sonnet-4-5".to_string();
                 }
@@ -331,10 +331,10 @@ fn build_provider(cfg: &Config) -> Arc<dyn Provider> {
         }
         #[cfg(feature = "provider-copilot")]
         "github-copilot" | "copilot" => {
-            if let Ok(p) = aclaw::providers::copilot::CopilotProvider::from_openclaw() {
+            if let Ok(p) = unthinkclaw::providers::copilot::CopilotProvider::from_openclaw() {
                 Arc::new(p)
             } else {
-                Arc::new(aclaw::providers::copilot::CopilotProvider::new(&api_key))
+                Arc::new(unthinkclaw::providers::copilot::CopilotProvider::new(&api_key))
             }
         }
         #[cfg(feature = "provider-ollama")]
