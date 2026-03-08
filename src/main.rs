@@ -13,12 +13,12 @@ use unthinkclaw::channels::cli::CliChannel;
 use unthinkclaw::channels::telegram::TelegramChannel;
 #[cfg(feature = "channel-discord")]
 use unthinkclaw::channels::discord::DiscordChannel;
-use unthinkclaw::channels::IncomingMessage;
 use unthinkclaw::config::Config;
+use unthinkclaw::cron_scheduler::CronScheduler;
 use unthinkclaw::gateway;
 use unthinkclaw::heartbeat::{self, HeartbeatConfig};
+use unthinkclaw::memory::search::{MemorySearchTool, MemoryGetTool};
 use unthinkclaw::memory::sqlite::SqliteMemory;
-use unthinkclaw::memory::search;
 use unthinkclaw::prompt;
 use unthinkclaw::skills;
 #[cfg(feature = "provider-anthropic")]
@@ -32,7 +32,7 @@ use unthinkclaw::tools::shell::ShellTool;
 use unthinkclaw::tools::Tool;
 
 #[derive(Parser)]
-#[command(name = "aclaw", about = "Lightweight agent runtime — successor to OpenClaw", version)]
+#[command(name = "unthinkclaw", about = "Lightweight agent runtime — unthink everything", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -113,6 +113,63 @@ enum Commands {
         #[arg(short = 'k', long)]
         api_key: Option<String>,
     },
+
+    /// Manage cron jobs
+    Cron {
+        #[command(subcommand)]
+        action: CronAction,
+
+        /// Workspace directory
+        #[arg(short, long)]
+        workspace: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum CronAction {
+    /// Add a new cron job
+    Add {
+        /// Job name
+        #[arg(short, long)]
+        name: String,
+
+        /// Cron expression (e.g. "0 0 9 * * * *")
+        #[arg(short, long)]
+        schedule: String,
+
+        /// Task prompt text
+        #[arg(short, long)]
+        task: String,
+
+        /// Channel (default: cli)
+        #[arg(long, default_value = "cli")]
+        channel: String,
+
+        /// Model override
+        #[arg(long, default_value = "")]
+        model: String,
+    },
+
+    /// List all cron jobs
+    List,
+
+    /// Remove a cron job by ID or name
+    Remove {
+        /// Job ID or name
+        id_or_name: String,
+    },
+
+    /// Enable a cron job
+    Enable {
+        /// Job ID or name
+        id_or_name: String,
+    },
+
+    /// Disable a cron job
+    Disable {
+        /// Job ID or name
+        id_or_name: String,
+    },
 }
 
 #[tokio::main]
@@ -143,43 +200,62 @@ async fn main() -> anyhow::Result<()> {
                 &workspace.join(".unthinkclaw/memory.db").to_string_lossy(),
             )?);
 
-            // Build system prompt from workspace files
+            // Build system prompt from workspace context files
             let system_prompt = prompt::build_system_prompt(&workspace);
 
+            // Discover skills
+            let discovered_skills = skills::discover_skills();
+            if !discovered_skills.is_empty() {
+                tracing::info!("Discovered {} skills", discovered_skills.len());
+            }
+
+            // Register tools (including memory search/get)
             let tools: Vec<Arc<dyn Tool>> = vec![
                 Arc::new(ShellTool::new(workspace.clone())),
                 Arc::new(FileReadTool::new(workspace.clone())),
                 Arc::new(FileWriteTool::new(workspace.clone())),
+                Arc::new(MemorySearchTool::new(workspace.clone())),
+                Arc::new(MemoryGetTool::new(workspace.clone())),
             ];
 
-            let runner = AgentRunner::new(provider, tools, memory, &system_prompt, model);
+            let runner = AgentRunner::new(provider, tools, memory, &system_prompt, model)
+                .with_workspace(workspace.clone())
+                .with_skills(discovered_skills);
+
+            // Start cron scheduler background task
+            let cron_db_path = workspace.join(".unthinkclaw/cron.db");
+            if let Ok(cron_sched) = CronScheduler::new(&cron_db_path.to_string_lossy()) {
+                let cron_sched = Arc::new(cron_sched);
+                let (_cron_rx, _cron_shutdown) = unthinkclaw::cron_scheduler::start_cron_ticker(cron_sched);
+                // Due jobs from cron_rx would be handled here in a full implementation
+                // For now, the ticker runs and logs due jobs
+            }
 
             match channel.as_str() {
                 #[cfg(feature = "channel-cli")]
                 "cli" => {
-                    println!("🚀 unthinkclaw — {} via {}", cfg.model, cfg.provider.name);
+                    println!("unthinkclaw v{} — {} via {}", env!("CARGO_PKG_VERSION"), cfg.model, cfg.provider.name);
                     println!("   Workspace: {}", workspace.display());
                     println!("   Channel: CLI");
-                    println!("   Features: system-prompt, memory-search, heartbeat, skills");
                     println!("   Type /quit to exit\n");
 
-                    // Start heartbeat (will check HEARTBEAT.md periodically)
+                    // Start heartbeat background task
                     let heartbeat_cfg = HeartbeatConfig {
                         workspace: workspace.clone(),
                         ..Default::default()
                     };
-                    let (hb_tx, _hb_rx) = tokio::sync::mpsc::channel(10);
+                    let (hb_tx, hb_rx) = tokio::sync::mpsc::channel(16);
                     let _heartbeat_handle = heartbeat::start_heartbeat(heartbeat_cfg, hb_tx);
 
                     let mut ch = CliChannel::new();
-                    runner.run(&mut ch).await?;
+                    runner.run_with_extra_rx(&mut ch, hb_rx).await?;
                 }
                 #[cfg(feature = "channel-telegram")]
                 "telegram" => {
                     let token = telegram_token.ok_or_else(|| anyhow::anyhow!("--telegram-token required"))?;
                     let chat_id = telegram_chat_id.ok_or_else(|| anyhow::anyhow!("--telegram-chat-id required"))?;
 
-                    println!("🚀 unthinkclaw — {} via Telegram", cfg.model);
+                    println!("unthinkclaw — {} via Telegram", cfg.model);
                     println!("   Chat ID: {}", chat_id);
                     println!("   Listening for messages...");
 
@@ -192,7 +268,7 @@ async fn main() -> anyhow::Result<()> {
                     let channel_id =
                         _discord_channel_id.ok_or_else(|| anyhow::anyhow!("--discord-channel-id required"))?;
 
-                    println!("🚀 unthinkclaw — {} via Discord", cfg.model);
+                    println!("unthinkclaw — {} via Discord", cfg.model);
                     println!("   Channel ID: {}", channel_id);
                     println!("   Listening for messages...");
 
@@ -216,7 +292,7 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Gateway { addr, config } => {
             let _cfg = load_config(&config);
-            println!("🌐 aclaw Gateway — starting on {}", addr);
+            println!("unthinkclaw Gateway — starting on {}", addr);
             println!("   API: http://{}/api/chat", addr);
             println!("   WebSocket: ws://{}/ws", addr);
             gateway::start_gateway(&addr).await?;
@@ -225,7 +301,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => {
             println!("unthinkclaw v{}", env!("CARGO_PKG_VERSION"));
             println!("Status: OK");
-            println!("Commands: chat, ask, gateway, status, init");
+            println!("Commands: chat, ask, gateway, status, init, cron");
         }
 
         Commands::Init { provider, api_key } => {
@@ -234,7 +310,58 @@ async fn main() -> anyhow::Result<()> {
             cfg.provider.api_key = api_key;
             let json = serde_json::to_string_pretty(&cfg)?;
             std::fs::write("unthinkclaw.json", &json)?;
-            println!("✅ Created unthinkclaw.json");
+            println!("Created unthinkclaw.json");
+        }
+
+        Commands::Cron { action, workspace } => {
+            let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
+            let db_path = workspace.join(".unthinkclaw/cron.db");
+            let scheduler = CronScheduler::new(&db_path.to_string_lossy())?;
+
+            match action {
+                CronAction::Add { name, schedule, task, channel, model } => {
+                    let id = scheduler.add(&name, &schedule, &task, &channel, &model)?;
+                    println!("Added cron job: {} (id: {})", name, id);
+                }
+                CronAction::List => {
+                    let jobs = scheduler.list()?;
+                    if jobs.is_empty() {
+                        println!("No cron jobs configured.");
+                    } else {
+                        for job in &jobs {
+                            println!(
+                                "{} [{}] {} — \"{}\" (next: {})",
+                                if job.enabled { "+" } else { "-" },
+                                job.name,
+                                job.schedule,
+                                job.task,
+                                job.next_run.as_deref().unwrap_or("none"),
+                            );
+                        }
+                    }
+                }
+                CronAction::Remove { id_or_name } => {
+                    if scheduler.remove(&id_or_name)? {
+                        println!("Removed: {}", id_or_name);
+                    } else {
+                        println!("Not found: {}", id_or_name);
+                    }
+                }
+                CronAction::Enable { id_or_name } => {
+                    if scheduler.enable(&id_or_name)? {
+                        println!("Enabled: {}", id_or_name);
+                    } else {
+                        println!("Not found: {}", id_or_name);
+                    }
+                }
+                CronAction::Disable { id_or_name } => {
+                    if scheduler.disable(&id_or_name)? {
+                        println!("Disabled: {}", id_or_name);
+                    } else {
+                        println!("Not found: {}", id_or_name);
+                    }
+                }
+            }
         }
     }
 
@@ -255,7 +382,7 @@ fn load_config(path: &str) -> Config {
         } else if let Ok(token) = resolve_openclaw_token("anthropic") {
             cfg.provider.api_key = Some(token);
             cfg.model = "claude-sonnet-4-5".to_string(); // OAuth-compatible model
-        } 
+        }
         #[cfg(feature = "provider-anthropic")]
         {
             if let Ok(_provider) = unthinkclaw::providers::anthropic::AnthropicProvider::from_env_or_oauth() {
@@ -267,7 +394,7 @@ fn load_config(path: &str) -> Config {
                 }
             }
         }
-        
+
         if cfg.provider.api_key.is_none() {
             if let Ok(key) = std::env::var("OPENAI_API_KEY") {
                 cfg.provider.name = "openai".to_string();
@@ -282,14 +409,14 @@ fn load_config(path: &str) -> Config {
 fn resolve_openclaw_token(provider: &str) -> anyhow::Result<String> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("No home dir"))?;
     let auth_path = home.join(".openclaw/agents/main/agent/auth-profiles.json");
-    
+
     if !auth_path.exists() {
         return Err(anyhow::anyhow!("No auth-profiles.json found"));
     }
-    
+
     let content = std::fs::read_to_string(&auth_path)?;
     let data: serde_json::Value = serde_json::from_str(&content)?;
-    
+
     // Try provider:default first
     let profile_key = format!("{}:default", provider);
     if let Some(profile) = data["profiles"][&profile_key].as_object() {
@@ -308,7 +435,7 @@ fn resolve_openclaw_token(provider: &str) -> anyhow::Result<String> {
             }
         }
     }
-    
+
     // Try any profile for this provider
     if let Some(profiles) = data["profiles"].as_object() {
         for (key, value) in profiles {
@@ -330,7 +457,7 @@ fn resolve_openclaw_token(provider: &str) -> anyhow::Result<String> {
             }
         }
     }
-    
+
     Err(anyhow::anyhow!("No {} credentials in auth-profiles", provider))
 }
 

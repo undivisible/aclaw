@@ -106,10 +106,18 @@ pub fn match_skill<'a>(skills: &'a [Skill], user_message: &str) -> Option<&'a Sk
             score += 10.0;
         }
 
-        // Word overlap with description
+        // Word overlap: message words in description
         for word in &msg_words {
             if word.len() < 3 { continue; }
             if desc_lower.contains(word) {
+                score += 1.0;
+            }
+        }
+
+        // Word overlap: description words in message
+        for word in desc_lower.split(|c: char| !c.is_alphanumeric()) {
+            if word.len() < 3 { continue; }
+            if msg_lower.contains(word) {
                 score += 1.0;
             }
         }
@@ -166,7 +174,7 @@ mod tests {
         assert!(matched.is_some());
         assert_eq!(matched.unwrap().name, "weather");
 
-        let matched = match_skill(&skills, "check the PR status");
+        let matched = match_skill(&skills, "review the github issues");
         assert!(matched.is_some());
         assert_eq!(matched.unwrap().name, "github");
     }

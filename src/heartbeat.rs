@@ -2,7 +2,6 @@
 //! and trigger agent actions when tasks are present.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::channels::IncomingMessage;

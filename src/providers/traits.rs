@@ -11,20 +11,26 @@ use crate::tools::ToolSpec;
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// For tool_result messages: the tool_use_id this is responding to
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
 }
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into() }
+        Self { role: "system".into(), content: content.into(), tool_use_id: None }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into() }
+        Self { role: "user".into(), content: content.into(), tool_use_id: None }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: content.into() }
+        Self { role: "assistant".into(), content: content.into(), tool_use_id: None }
     }
     pub fn tool_result(id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: "tool".into(), content: format!("[{}] {}", id.into(), content.into()) }
+        Self { role: "tool_result".into(), content: content.into(), tool_use_id: Some(id.into()) }
+    }
+    pub fn is_tool_result(&self) -> bool {
+        self.role == "tool_result"
     }
 }
 

@@ -42,6 +42,64 @@ impl AnthropicProvider {
         self
     }
 
+    /// Convert internal ChatMessage list to Anthropic API format.
+    /// Handles: system (filtered), user, assistant, tool_result → user with content blocks
+    fn build_anthropic_messages(&self, messages: &[ChatMessage]) -> Vec<Value> {
+        let mut result: Vec<Value> = Vec::new();
+
+        for msg in messages {
+            match msg.role.as_str() {
+                "system" => continue, // handled separately
+                "user" => {
+                    result.push(serde_json::json!({
+                        "role": "user",
+                        "content": &msg.content,
+                    }));
+                }
+                "assistant" => {
+                    result.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": &msg.content,
+                    }));
+                }
+                "assistant_tool_use" => {
+                    // Assistant message that requested tool use — reconstruct content blocks
+                    // The content field has the text, tool_use_id has serialized tool calls
+                    if let Some(tool_json) = &msg.tool_use_id {
+                        if let Ok(blocks) = serde_json::from_str::<Vec<Value>>(tool_json) {
+                            result.push(serde_json::json!({
+                                "role": "assistant",
+                                "content": blocks,
+                            }));
+                        }
+                    }
+                }
+                "tool_result" => {
+                    // Anthropic wants tool results as role "user" with tool_result content blocks
+                    if let Some(tool_use_id) = &msg.tool_use_id {
+                        result.push(serde_json::json!({
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": &msg.content,
+                            }],
+                        }));
+                    }
+                }
+                other => {
+                    // Fallback
+                    result.push(serde_json::json!({
+                        "role": other,
+                        "content": &msg.content,
+                    }));
+                }
+            }
+        }
+
+        result
+    }
+
     fn build_tools_payload(&self, tools: &[ToolSpec]) -> Vec<Value> {
         tools.iter().map(|t| {
             serde_json::json!({
@@ -72,15 +130,19 @@ impl Provider for AnthropicProvider {
             .timeout(std::time::Duration::from_secs(120))
             .build()?;
 
-        // Split system message from conversation
-        let system = request.messages.iter()
-            .find(|m| m.role == "system")
-            .map(|m| m.content.clone());
+        // Split system message from conversation (combine multiple system msgs)
+        let system: Option<String> = {
+            let sys_parts: Vec<&str> = request.messages.iter()
+                .filter(|m| m.role == "system")
+                .map(|m| m.content.as_str())
+                .collect();
+            if sys_parts.is_empty() { None } else { Some(sys_parts.join("\n\n---\n\n")) }
+        };
 
-        let messages: Vec<Value> = request.messages.iter()
-            .filter(|m| m.role != "system")
-            .map(|m| serde_json::json!({ "role": &m.role, "content": &m.content }))
-            .collect();
+        // Build Anthropic-format messages
+        // Key: tool_result messages must be role "user" with tool_result content blocks
+        // Assistant messages after tool calls need tool_use content blocks
+        let messages: Vec<Value> = self.build_anthropic_messages(&request.messages);
 
         let mut body = serde_json::json!({
             "model": &request.model,

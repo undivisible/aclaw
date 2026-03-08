@@ -111,6 +111,116 @@ pub fn memory_get(workspace: &Path, file_path: &str, from_line: usize, num_lines
     Some(lines[start..end].join("\n"))
 }
 
+// -- Tool wrappers for the agent loop --
+
+use async_trait::async_trait;
+use serde_json::json;
+use crate::tools::{Tool, ToolResult, ToolSpec};
+
+/// Tool: memory_search — search memory files for a query.
+pub struct MemorySearchTool {
+    workspace: PathBuf,
+}
+
+impl MemorySearchTool {
+    pub fn new(workspace: PathBuf) -> Self {
+        Self { workspace }
+    }
+}
+
+#[async_trait]
+impl Tool for MemorySearchTool {
+    fn name(&self) -> &str {
+        "memory_search"
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "memory_search".to_string(),
+            description: "Search workspace memory files (MEMORY.md, memory/*.md) for relevant information.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query" },
+                    "limit": { "type": "integer", "description": "Maximum results (default 10)" }
+                },
+                "required": ["query"]
+            }),
+        }
+    }
+
+    async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
+        let args: serde_json::Value = serde_json::from_str(arguments)?;
+        let query = args["query"].as_str().unwrap_or("");
+        let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+
+        if query.is_empty() {
+            return Ok(ToolResult::error("Query is required"));
+        }
+
+        let results = memory_search(&self.workspace, query, limit);
+        if results.is_empty() {
+            return Ok(ToolResult::success("No results found."));
+        }
+
+        let output: Vec<String> = results.iter().map(|r| {
+            format!("{}:{} (score {:.1}) — {}", r.path, r.line_number, r.score, r.snippet.replace('\n', " | "))
+        }).collect();
+
+        Ok(ToolResult::success(output.join("\n")))
+    }
+}
+
+/// Tool: memory_get — read lines from a memory file.
+pub struct MemoryGetTool {
+    workspace: PathBuf,
+}
+
+impl MemoryGetTool {
+    pub fn new(workspace: PathBuf) -> Self {
+        Self { workspace }
+    }
+}
+
+#[async_trait]
+impl Tool for MemoryGetTool {
+    fn name(&self) -> &str {
+        "memory_get"
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "memory_get".to_string(),
+            description: "Read lines from a memory file in the workspace.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path (e.g. MEMORY.md, memory/notes.md)" },
+                    "from_line": { "type": "integer", "description": "Starting line (1-based, default 1)" },
+                    "num_lines": { "type": "integer", "description": "Lines to read (default 50)" }
+                },
+                "required": ["path"]
+            }),
+        }
+    }
+
+    async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
+        let args: serde_json::Value = serde_json::from_str(arguments)?;
+        let path = args["path"].as_str().unwrap_or("");
+        let from_line = args["from_line"].as_u64().unwrap_or(1) as usize;
+        let num_lines = args["num_lines"].as_u64().unwrap_or(50) as usize;
+
+        if path.is_empty() {
+            return Ok(ToolResult::error("Path is required"));
+        }
+
+        match memory_get(&self.workspace, path, from_line, num_lines) {
+            Some(content) => Ok(ToolResult::success(content)),
+            None => Ok(ToolResult::error("File not found or path not allowed")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

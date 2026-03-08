@@ -79,6 +79,7 @@ impl TelegramChannel {
             .json(&serde_json::json!({
                 "chat_id": self.chat_id,
                 "text": text,
+                "parse_mode": "Markdown",
             }))
             .send()
             .await?;

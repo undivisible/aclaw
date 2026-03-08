@@ -196,9 +196,32 @@ impl AgentRunner {
                 return Ok(text);
             }
 
-            // Add assistant message with tool calls
-            if let Some(text) = &response.text {
-                messages.push(ChatMessage::assistant(text));
+            // Add assistant message with tool_use content blocks
+            // Anthropic requires the full assistant response (text + tool_use blocks)
+            {
+                let mut content_blocks: Vec<serde_json::Value> = Vec::new();
+                if let Some(text) = &response.text {
+                    if !text.is_empty() {
+                        content_blocks.push(serde_json::json!({
+                            "type": "text",
+                            "text": text,
+                        }));
+                    }
+                }
+                for tc in &response.tool_calls {
+                    content_blocks.push(serde_json::json!({
+                        "type": "tool_use",
+                        "id": &tc.id,
+                        "name": &tc.name,
+                        "input": serde_json::from_str::<serde_json::Value>(&tc.arguments).unwrap_or_default(),
+                    }));
+                }
+                // Store as assistant_tool_use with serialized content blocks
+                messages.push(ChatMessage {
+                    role: "assistant_tool_use".to_string(),
+                    content: String::new(),
+                    tool_use_id: Some(serde_json::to_string(&content_blocks).unwrap_or_default()),
+                });
             }
 
             // Execute each tool call
