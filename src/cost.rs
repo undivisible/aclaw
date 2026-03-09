@@ -40,10 +40,23 @@ pub struct CostRecord {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// Claude API rate limit status (from response headers)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitStatus {
+    pub requests_limit: Option<usize>,
+    pub requests_remaining: Option<usize>,
+    pub input_tokens_limit: Option<usize>,
+    pub input_tokens_remaining: Option<usize>,
+    pub output_tokens_limit: Option<usize>,
+    pub output_tokens_remaining: Option<usize>,
+    pub tokens_reset: Option<String>,
+}
+
 /// Cost tracker (in-memory + SQLite persistence)
 pub struct CostTracker {
     costs: Arc<RwLock<Vec<CostRecord>>>,
     models: Arc<RwLock<Vec<ModelCost>>>,
+    rate_limit_status: Arc<RwLock<Option<RateLimitStatus>>>,
 }
 
 impl CostTracker {
@@ -85,6 +98,7 @@ impl CostTracker {
         Self {
             costs: Arc::new(RwLock::new(Vec::new())),
             models: Arc::new(RwLock::new(models)),
+            rate_limit_status: Arc::new(RwLock::new(None)),
         }
     }
     
@@ -146,6 +160,40 @@ impl CostTracker {
             .filter(|c| c.timestamp > cutoff)
             .cloned()
             .collect()
+    }
+    
+    /// Update rate limit status from Anthropic API response headers
+    pub async fn update_rate_limits(&self, headers: &reqwest::header::HeaderMap) {
+        let status = RateLimitStatus {
+            requests_limit: headers.get("anthropic-ratelimit-requests-limit")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok()),
+            requests_remaining: headers.get("anthropic-ratelimit-requests-remaining")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok()),
+            input_tokens_limit: headers.get("anthropic-ratelimit-input-tokens-limit")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok()),
+            input_tokens_remaining: headers.get("anthropic-ratelimit-input-tokens-remaining")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok()),
+            output_tokens_limit: headers.get("anthropic-ratelimit-output-tokens-limit")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok()),
+            output_tokens_remaining: headers.get("anthropic-ratelimit-output-tokens-remaining")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok()),
+            tokens_reset: headers.get("anthropic-ratelimit-tokens-reset")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string()),
+        };
+        
+        *self.rate_limit_status.write().await = Some(status);
+    }
+    
+    /// Get current rate limit status
+    pub async fn get_rate_limits(&self) -> Option<RateLimitStatus> {
+        self.rate_limit_status.read().await.clone()
     }
 }
 

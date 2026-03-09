@@ -163,12 +163,22 @@ impl Provider for AnthropicProvider {
             .build()?;
 
         // Split system message from conversation (combine multiple system msgs)
-        let system: Option<String> = {
+        // Use prompt caching for system prompts (cache_control breakpoint)
+        let system: Option<Value> = {
             let sys_parts: Vec<&str> = request.messages.iter()
                 .filter(|m| m.role == "system")
                 .map(|m| m.content.as_str())
                 .collect();
-            if sys_parts.is_empty() { None } else { Some(sys_parts.join("\n\n---\n\n")) }
+            if sys_parts.is_empty() { 
+                None 
+            } else { 
+                // Wrap system prompt with cache_control for prompt caching
+                Some(serde_json::json!([{
+                    "type": "text",
+                    "text": sys_parts.join("\n\n---\n\n"),
+                    "cache_control": {"type": "ephemeral"}
+                }]))
+            }
         };
 
         // Build Anthropic-format messages
@@ -177,12 +187,12 @@ impl Provider for AnthropicProvider {
         let mut body = serde_json::json!({
             "model": &request.model,
             "messages": messages,
-            "max_tokens": request.max_tokens.unwrap_or(4096),
+            "max_tokens": request.max_tokens.unwrap_or(8192),
             "temperature": request.temperature,
         });
 
         if let Some(sys) = system {
-            body["system"] = Value::String(sys);
+            body["system"] = sys;
         }
 
         if let Some(tools) = &request.tools {
@@ -202,10 +212,11 @@ impl Provider for AnthropicProvider {
         if is_oauth {
             req_builder = req_builder
                 .header("Authorization", format!("Bearer {}", &self.api_key))
-                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14");
+                .header("anthropic-beta", "prompt-caching-2024-07-31,claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14");
         } else {
             req_builder = req_builder
-                .header("x-api-key", &self.api_key);
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-beta", "prompt-caching-2024-07-31");
         }
 
         let resp = req_builder
@@ -219,10 +230,18 @@ impl Provider for AnthropicProvider {
             anyhow::bail!("Anthropic API error {}: {}", status, &text[..text.len().min(200)]);
         }
 
+        // Capture response headers for rate limit tracking
+        let headers = resp.headers().clone();
+        
         let data: Value = resp.json().await?;
 
         // Record usage for cost tracking
         self.record_usage(&data, &request.model).await;
+        
+        // Update rate limits from response headers
+        if let Some(tracker) = &self.cost_tracker {
+            tracker.update_rate_limits(&headers).await;
+        }
 
         let mut text_parts = Vec::new();
         let mut tool_calls = Vec::new();

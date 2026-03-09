@@ -20,5 +20,6 @@ pub mod dynamic;
 pub mod vibemania;
 pub mod browser;
 pub mod mcp;
+pub mod claude_usage;
 
 pub use traits::{Tool, ToolSpec, ToolResult};

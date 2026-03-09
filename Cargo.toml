@@ -53,6 +53,9 @@ provider-cloudflare = []
 # Docker container isolation (pulls in bollard)
 docker = ["dep:bollard"]
 
+# Swarm mode (SurrealDB + RocksDB for distributed agents)
+swarm = ["dep:surrealdb", "dep:rocksdb"]
+
 # Bundles
 all-channels = ["channel-cli", "channel-telegram", "channel-discord", "channel-slack", "channel-whatsapp", "channel-signal", "channel-matrix", "channel-irc", "channel-googlechat", "channel-msteams"]
 all-providers = ["provider-anthropic", "provider-openai", "provider-copilot", "provider-ollama", "provider-openrouter", "provider-groq", "provider-together", "provider-mistral", "provider-deepseek", "provider-fireworks", "provider-perplexity", "provider-xai", "provider-moonshot", "provider-venice", "provider-huggingface", "provider-siliconflow", "provider-cerebras", "provider-minimax", "provider-vercel", "provider-cloudflare"]
@@ -89,6 +92,10 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Database (SQLite for memory/state)
 rusqlite = { version = "0.30", features = ["bundled"] }
+
+# Embedded SurrealDB + RocksDB (optional for swarm mode)
+surrealdb = { version = "2", features = ["kv-rocksdb"], optional = true }
+rocksdb = { version = "0.22", optional = true }
 
 # Container management (optional — only if you need Docker isolation)
 bollard = { version = "0.18", optional = true }

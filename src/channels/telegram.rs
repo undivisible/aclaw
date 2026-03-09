@@ -125,6 +125,16 @@ fn sanitize_markdown(text: &str) -> String {
             continue;
         }
         
+        // Strip Markdown headers (Telegram doesn't support them)
+        if trimmed.starts_with('#') {
+            // Convert headers to bold text
+            let header_text = trimmed.trim_start_matches('#').trim();
+            if !header_text.is_empty() {
+                result.push_str(&format!("**{}**\n", header_text));
+            }
+            continue;
+        }
+        
         // Detect table rows (contain pipes, not inside code)
         if trimmed.contains('|') && !trimmed.is_empty() {
             let cells: Vec<&str> = trimmed.split('|')

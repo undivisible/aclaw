@@ -14,8 +14,10 @@ use crate::providers::{ChatMessage, ChatRequest, Provider};
 use crate::skills;
 use crate::tools::Tool;
 
-/// Circuit breaker: stop after this many rounds to prevent infinite loops.
-const CIRCUIT_BREAKER_ROUNDS: usize = 25;
+/// Compact conversation after this many rounds (uses Haiku to summarize)
+const COMPACTION_THRESHOLD: usize = 15;
+/// Hard circuit breaker (absolute max rounds)
+const CIRCUIT_BREAKER_ROUNDS: usize = 50;
 /// Warn the LLM after this many identical tool calls
 const LOOP_WARN_THRESHOLD: usize = 5;
 /// Hard stop after this many identical consecutive tool calls
@@ -24,6 +26,10 @@ const LOOP_BREAK_THRESHOLD: usize = 8;
 const MAX_HISTORY_MESSAGES: usize = 8;
 /// Max chars for a single tool result (OpenClaw-style truncation)
 const MAX_TOOL_RESULT_CHARS: usize = 20_000;
+/// Max context chars before triggering mid-loop compaction
+const MAX_CONTEXT_CHARS: usize = 150_000;
+/// Haiku model for compaction (fast + cheap)
+const COMPACTION_MODEL: &str = "claude-haiku-3-5";
 
 /// Progress update sent during agent processing
 #[derive(Debug, Clone)]
@@ -45,6 +51,8 @@ pub struct AgentRunner {
     workspace: PathBuf,
     skills: Vec<skills::Skill>,
     cost_tracker: Arc<CostTracker>,
+    /// Steering messages — injected into the loop between rounds
+    pub steering_queue: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl AgentRunner {
@@ -64,7 +72,13 @@ impl AgentRunner {
             workspace: PathBuf::from("."),
             skills: Vec::new(),
             cost_tracker: Arc::new(CostTracker::new()),
+            steering_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// Queue a steering message to inject into the current agent loop
+    pub fn steer(&self, message: String) {
+        self.steering_queue.lock().unwrap().push(message);
     }
 
     pub fn with_workspace(mut self, workspace: PathBuf) -> Self {
@@ -75,6 +89,11 @@ impl AgentRunner {
     pub fn with_skills(mut self, skills: Vec<skills::Skill>) -> Self {
         self.skills = skills;
         self
+    }
+
+    /// Get cost tracker reference (for ClaudeUsageTool)
+    pub fn cost_tracker(&self) -> Arc<CostTracker> {
+        self.cost_tracker.clone()
     }
 
     /// Get cost summary
@@ -252,10 +271,39 @@ impl AgentRunner {
             .map(|t| t.spec())
             .collect();
 
-        // Agent loop: unlimited rounds with loop detection
+        // Agent loop with compaction
         let mut tool_call_history: Vec<String> = Vec::new();
+        let mut compactions_done: usize = 0;
+
         for round in 0..CIRCUIT_BREAKER_ROUNDS {
-            tracing::info!("Agent round {} — {} messages", round + 1, messages.len());
+            // Check for steering messages
+            {
+                let mut queue = self.steering_queue.lock().unwrap();
+                if !queue.is_empty() {
+                    for steer_msg in queue.drain(..) {
+                        tracing::info!("Steering message injected: {}", &steer_msg[..steer_msg.len().min(80)]);
+                        messages.push(ChatMessage::user(format!(
+                            "⚡ STEERING — new instruction from user (prioritize this): {}", steer_msg
+                        )));
+                    }
+                }
+            }
+
+            // Mid-loop compaction: if context is too large or we hit the threshold
+            let context_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+            if (round > 0 && round % COMPACTION_THRESHOLD == 0) || context_chars > MAX_CONTEXT_CHARS {
+                tracing::info!("Compacting conversation at round {} ({} chars, {} msgs)", 
+                    round + 1, context_chars, messages.len());
+                messages = self.compact_messages(messages, &msg.text).await?;
+                compactions_done += 1;
+                tracing::info!("Compacted to {} msgs, {} chars", 
+                    messages.len(), 
+                    messages.iter().map(|m| m.content.len()).sum::<usize>());
+            }
+
+            tracing::info!("Agent round {} — {} messages, ~{} chars", 
+                round + 1, messages.len(),
+                messages.iter().map(|m| m.content.len()).sum::<usize>());
 
             let request = ChatRequest {
                 messages: messages.clone(),
@@ -390,7 +438,108 @@ impl AgentRunner {
             }
         }
 
-        tracing::error!("Circuit breaker: {} rounds without completion", CIRCUIT_BREAKER_ROUNDS);
-        Ok("Hit the circuit breaker. Try rephrasing?".to_string())
+        tracing::warn!("Circuit breaker after {} rounds ({} compactions)", CIRCUIT_BREAKER_ROUNDS, compactions_done);
+        
+        self.memory.store_conversation(&msg.chat_id, &msg.sender_id, "user", &msg.text).await?;
+        self.memory.store_conversation(
+            &msg.chat_id, "assistant", "assistant",
+            &format!("Hit {} rounds ({} compactions). Task may need to be broken down.", 
+                CIRCUIT_BREAKER_ROUNDS, compactions_done),
+        ).await?;
+        
+        Ok(format!(
+            "⚠️ Hit {} rounds ({} compactions performed). Break this into smaller tasks?",
+            CIRCUIT_BREAKER_ROUNDS, compactions_done
+        ))
+    }
+
+    /// Compact conversation using Haiku — summarize old messages, keep recent ones
+    async fn compact_messages(
+        &self,
+        messages: Vec<ChatMessage>,
+        original_task: &str,
+    ) -> anyhow::Result<Vec<ChatMessage>> {
+        // Keep: system prompt + last 6 messages (3 exchanges)
+        let keep_recent = 6;
+        
+        if messages.len() <= keep_recent + 2 {
+            return Ok(messages); // Nothing to compact
+        }
+        
+        // Split: system messages + old messages + recent messages
+        let system_msgs: Vec<&ChatMessage> = messages.iter()
+            .filter(|m| m.role == "system")
+            .collect();
+        let non_system: Vec<&ChatMessage> = messages.iter()
+            .filter(|m| m.role != "system")
+            .collect();
+        
+        if non_system.len() <= keep_recent {
+            return Ok(messages);
+        }
+        
+        let (old_msgs, recent_msgs) = non_system.split_at(non_system.len() - keep_recent);
+        
+        // Build summary of old messages for Haiku
+        let mut summary_input = String::new();
+        for m in old_msgs {
+            let role_label = match m.role.as_str() {
+                "user" => "User",
+                "assistant" | "assistant_tool_use" => "Assistant",
+                "tool_result" => "Tool Result",
+                _ => &m.role,
+            };
+            // Truncate each message for the summary request
+            let content = if m.content.len() > 500 {
+                format!("{}...", &m.content[..500])
+            } else {
+                m.content.clone()
+            };
+            summary_input.push_str(&format!("[{}]: {}\n", role_label, content));
+        }
+        
+        // Ask Haiku to summarize
+        let compaction_prompt = format!(
+            "Summarize this conversation concisely. The original task was: \"{}\"\n\n\
+            Focus on: what was accomplished, what tools were used, key results, and what's still pending.\n\n\
+            Conversation:\n{}",
+            original_task,
+            summary_input
+        );
+        
+        let compact_request = ChatRequest {
+            messages: vec![
+                ChatMessage::user(&compaction_prompt),
+            ],
+            tools: None,
+            model: COMPACTION_MODEL.to_string(),
+            temperature: 0.3,
+            max_tokens: Some(1000),
+        };
+        
+        let summary = match self.provider.chat(&compact_request).await {
+            Ok(resp) => resp.text.unwrap_or_else(|| "Failed to summarize.".to_string()),
+            Err(e) => {
+                tracing::warn!("Compaction failed: {}, falling back to truncation", e);
+                // Fallback: just truncate old messages
+                format!("[Previous {} messages truncated to save context]", old_msgs.len())
+            }
+        };
+        
+        // Rebuild messages: system + summary + recent
+        let mut compacted = Vec::new();
+        for sm in &system_msgs {
+            compacted.push((*sm).clone());
+        }
+        compacted.push(ChatMessage::user(format!(
+            "[Conversation compacted — {} earlier messages summarized]\n\n{}",
+            old_msgs.len(), summary
+        )));
+        compacted.push(ChatMessage::assistant("Understood, continuing from the summary.".to_string()));
+        for rm in recent_msgs {
+            compacted.push((*rm).clone());
+        }
+        
+        Ok(compacted)
     }
 }

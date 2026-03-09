@@ -125,6 +125,16 @@ enum Commands {
         #[arg(short, long)]
         workspace: Option<PathBuf>,
     },
+
+    /// Swarm commands (multi-agent coordination)
+    Swarm {
+        #[command(subcommand)]
+        action: SwarmAction,
+
+        /// Workspace directory
+        #[arg(short, long)]
+        workspace: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -171,6 +181,57 @@ enum CronAction {
     Disable {
         /// Job ID or name
         id_or_name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SwarmAction {
+    /// Start swarm coordinator
+    Start {
+        /// SurrealDB path
+        #[arg(long, default_value = ".unthinkclaw/swarm.db")]
+        surreal_path: String,
+
+        /// RocksDB cache path
+        #[arg(long, default_value = ".unthinkclaw/cache")]
+        cache_path: String,
+    },
+
+    /// Spawn N worker agents
+    Spawn {
+        /// Number of workers
+        #[arg(short, long, default_value = "1")]
+        count: usize,
+
+        /// Role/capabilities (comma-separated: coding,research,review)
+        #[arg(short, long, default_value = "coding")]
+        role: String,
+    },
+
+    /// Submit a task to the swarm
+    Task {
+        /// Task description
+        description: String,
+
+        /// Priority (low, medium, high, critical)
+        #[arg(short, long, default_value = "medium")]
+        priority: String,
+
+        /// Title (defaults to first line of description)
+        #[arg(short, long)]
+        title: Option<String>,
+    },
+
+    /// List active agents
+    Agents,
+
+    /// List pending tasks
+    Tasks,
+
+    /// Queue a message (steering)
+    Queue {
+        /// Message to queue
+        message: String,
     },
 }
 
@@ -241,6 +302,11 @@ async fn main() -> anyhow::Result<()> {
             let mut runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
                 .with_workspace(workspace.clone())
                 .with_skills(discovered_skills.clone());
+            
+            // Add claude_usage tool (needs cost tracker reference)
+            runner.add_tool(Arc::new(unthinkclaw::tools::claude_usage::ClaudeUsageTool::new(
+                runner.cost_tracker()
+            )));
 
             // Start cron scheduler background task
             let cron_db_path = workspace.join(".unthinkclaw/cron.db");
@@ -293,8 +359,17 @@ async fn main() -> anyhow::Result<()> {
                     let mut ch = TelegramChannel::new(token, chat_id);
                     let mut rx = ch.start().await?;
 
+                    let processing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
                     while let Some(msg) = rx.recv().await {
                         let text = msg.text.trim();
+
+                        // If we're processing and this isn't a command, steer
+                        if processing.load(std::sync::atomic::Ordering::SeqCst) && !text.starts_with('/') {
+                            runner.steer(text.to_string());
+                            let _ = tg.send_message("📌 Noted — steering current task.").await;
+                            continue;
+                        }
 
                         // Handle slash commands
                         if text.starts_with('/') {
@@ -421,6 +496,8 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
 
+                        processing.store(true, std::sync::atomic::Ordering::SeqCst);
+
                         // Send "thinking..." progress message
                         let _ = tg.send_typing().await;
                         let progress_msg_id = tg.send_message("⏳").await.unwrap_or(0);
@@ -491,6 +568,7 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                         }
+                        processing.store(false, std::sync::atomic::Ordering::SeqCst);
                     }
                 }
                 #[cfg(feature = "channel-discord")]
@@ -593,6 +671,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+
+        Commands::Swarm { action: _, workspace: _ } => {
+            eprintln!("⚠️ Swarm requires Phase 2 (SurrealDB + RocksDB). Coming soon.");
+            eprintln!("   Build with: cargo build --release --features surrealdb");
+            std::process::exit(1);
         }
     }
 
