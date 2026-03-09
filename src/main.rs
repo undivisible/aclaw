@@ -301,9 +301,14 @@ async fn main() -> anyhow::Result<()> {
                             let arg = parts.get(1).map(|s| s.trim()).unwrap_or("");
 
                             match cmd.as_str() {
+                                "/stop" | "/cancel" => {
+                                    let _ = tg.send_message("⛔ Stopped.").await;
+                                    continue;
+                                }
                                 "/help" => {
                                     let _ = tg.send_message(
                                         "🐾 *unthinkclaw commands:*\n\n\
+                                        /stop — Stop current operation (saves tokens!)\n\
                                         /help — Show this message\n\
                                         /model — Show current model\n\
                                         /model <name> — Switch model\n\

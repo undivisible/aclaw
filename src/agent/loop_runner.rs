@@ -14,11 +14,15 @@ use crate::skills;
 use crate::tools::Tool;
 
 /// Circuit breaker: stop after this many rounds to prevent infinite loops.
-const CIRCUIT_BREAKER_ROUNDS: usize = 50;
+const CIRCUIT_BREAKER_ROUNDS: usize = 25;
 /// Warn the LLM after this many identical tool calls
 const LOOP_WARN_THRESHOLD: usize = 5;
 /// Hard stop after this many identical consecutive tool calls
-const LOOP_BREAK_THRESHOLD: usize = 10;
+const LOOP_BREAK_THRESHOLD: usize = 8;
+/// Max conversation history (prevents context overflow)
+const MAX_HISTORY_MESSAGES: usize = 8;
+/// Max chars for a single tool result (OpenClaw-style truncation)
+const MAX_TOOL_RESULT_CHARS: usize = 20_000;
 
 /// Progress update sent during agent processing
 #[derive(Debug, Clone)]
@@ -222,8 +226,8 @@ impl AgentRunner {
             }
         }
 
-        // Load conversation history from SQLite
-        let history = self.memory.get_conversation_history(&msg.chat_id, 20).await?;
+        // Load conversation history from SQLite (LIMITED to 8 to save tokens)
+        let history = self.memory.get_conversation_history(&msg.chat_id, MAX_HISTORY_MESSAGES).await?;
         for (role, content) in history {
             match role.as_str() {
                 "user" => messages.push(ChatMessage::user(&content)),
@@ -350,7 +354,19 @@ impl AgentRunner {
                     crate::tools::ToolResult::error(format!("Unknown tool: {}", tc.name))
                 };
 
-                messages.push(ChatMessage::tool_result(&tc.id, &result.output));
+                // TRUNCATE tool result to save tokens (OpenClaw-style)
+                let truncated_output = if result.output.len() > MAX_TOOL_RESULT_CHARS {
+                    format!(
+                        "{}...\n⚠️ [Truncated from {} to {} chars. Use offset/limit params.]",
+                        &result.output[..MAX_TOOL_RESULT_CHARS],
+                        result.output.len(),
+                        MAX_TOOL_RESULT_CHARS
+                    )
+                } else {
+                    result.output.clone()
+                };
+
+                messages.push(ChatMessage::tool_result(&tc.id, &truncated_output));
             }
         }
 
