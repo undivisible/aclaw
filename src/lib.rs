@@ -39,6 +39,8 @@ pub use agent::AgentRunner;
 pub use channels::Channel;
 pub use cost::CostTracker;
 pub use scheduler::Scheduler;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "swarm")]
 pub use swarm::SwarmCoordinator;
+#[cfg(feature = "swarm")]
+pub use swarm::{DelegationManager, TeamManager, HandoffManager, ConcurrencyScheduler};
 

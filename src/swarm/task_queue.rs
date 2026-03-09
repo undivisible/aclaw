@@ -22,13 +22,13 @@ pub enum TaskStatus {
     Failed,
 }
 
-impl ToString for TaskStatus {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TaskStatus::Pending => "pending".to_string(),
-            TaskStatus::Running => "running".to_string(),
-            TaskStatus::Done => "done".to_string(),
-            TaskStatus::Failed => "failed".to_string(),
+            TaskStatus::Pending => write!(f, "pending"),
+            TaskStatus::Running => write!(f, "running"),
+            TaskStatus::Done => write!(f, "done"),
+            TaskStatus::Failed => write!(f, "failed"),
         }
     }
 }

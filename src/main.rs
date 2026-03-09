@@ -197,15 +197,85 @@ enum SwarmAction {
         cache_path: String,
     },
 
-    /// Spawn N worker agents
-    Spawn {
-        /// Number of workers
-        #[arg(short, long, default_value = "1")]
-        count: usize,
+    /// Register a named agent
+    AgentCreate {
+        /// Agent name (unique)
+        name: String,
 
-        /// Role/capabilities (comma-separated: coding,research,review)
-        #[arg(short, long, default_value = "coding")]
-        role: String,
+        /// LLM model
+        #[arg(long, default_value = "claude-sonnet-4-5")]
+        model: String,
+
+        /// Capabilities (comma-separated: coding,research,review,testing,documentation,design,devops,security)
+        #[arg(long, default_value = "coding")]
+        capabilities: String,
+
+        /// Tools (comma-separated)
+        #[arg(long)]
+        tools: Option<String>,
+
+        /// Max concurrent incoming delegations
+        #[arg(long, default_value = "5")]
+        max_concurrent: i32,
+    },
+
+    /// Create a delegation link between agents
+    AgentLink {
+        /// Source agent name
+        source: String,
+
+        /// Target agent name
+        target: String,
+
+        /// Direction: outbound, inbound, bidirectional
+        #[arg(long, default_value = "outbound")]
+        direction: String,
+
+        /// Max concurrent delegations on this link
+        #[arg(long, default_value = "3")]
+        max_concurrent: u32,
+    },
+
+    /// Create a team
+    TeamCreate {
+        /// Team name
+        name: String,
+
+        /// Lead agent name
+        #[arg(long)]
+        lead: String,
+    },
+
+    /// Add a task to a team's board
+    TeamTaskAdd {
+        /// Team name
+        team: String,
+
+        /// Task subject
+        subject: String,
+
+        /// Priority (0-10)
+        #[arg(short, long, default_value = "0")]
+        priority: i32,
+
+        /// Blocked by task IDs (comma-separated)
+        #[arg(long)]
+        blocked_by: Option<String>,
+    },
+
+    /// List active agents
+    Agents,
+
+    /// List pending tasks
+    Tasks,
+
+    /// List teams
+    Teams,
+
+    /// List delegations for an agent
+    Delegations {
+        /// Agent name
+        agent: String,
     },
 
     /// Submit a task to the swarm
@@ -222,17 +292,14 @@ enum SwarmAction {
         title: Option<String>,
     },
 
-    /// List active agents
-    Agents,
-
-    /// List pending tasks
-    Tasks,
-
     /// Queue a message (steering)
     Queue {
         /// Message to queue
         message: String,
     },
+
+    /// Show scheduler status
+    Status,
 }
 
 #[tokio::main]
@@ -673,10 +740,206 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Swarm { action: _, workspace: _ } => {
-            eprintln!("⚠️ Swarm requires Phase 2 (SurrealDB + RocksDB). Coming soon.");
-            eprintln!("   Build with: cargo build --release --features surrealdb");
-            std::process::exit(1);
+        Commands::Swarm { action, workspace } => {
+            #[cfg(not(feature = "swarm"))]
+            {
+                let _ = (action, workspace);
+                eprintln!("Swarm requires the 'swarm' feature. Build with: cargo build --release --features swarm");
+                std::process::exit(1);
+            }
+
+            #[cfg(feature = "swarm")]
+            {
+                use unthinkclaw::swarm::{SurrealBackend, SwarmStorage, SwarmCoordinator, AgentCapability, TaskPriority};
+                use unthinkclaw::swarm::models::LinkDirection;
+
+                let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
+                let surreal_path = workspace.join(".unthinkclaw/swarm.db");
+
+                // Ensure directory exists
+                if let Some(parent) = surreal_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+
+                let storage: Arc<dyn SwarmStorage> = Arc::new(SurrealBackend::new(&surreal_path).await?);
+                let coordinator = SwarmCoordinator::new(storage.clone());
+                coordinator.init().await?;
+
+                match action {
+                    SwarmAction::Start { surreal_path: _, cache_path: _ } => {
+                        println!("Swarm coordinator initialized at {}", surreal_path.display());
+                        println!("Ready for agent registration.");
+                    }
+
+                    SwarmAction::AgentCreate { name, model, capabilities, tools, max_concurrent } => {
+                        let caps: Vec<AgentCapability> = capabilities.split(',')
+                            .filter_map(|c| match c.trim() {
+                                "coding" => Some(AgentCapability::Coding),
+                                "research" => Some(AgentCapability::Research),
+                                "review" => Some(AgentCapability::Review),
+                                "testing" => Some(AgentCapability::Testing),
+                                "documentation" => Some(AgentCapability::Documentation),
+                                "design" => Some(AgentCapability::Design),
+                                "devops" => Some(AgentCapability::DevOps),
+                                "security" => Some(AgentCapability::Security),
+                                _ => None,
+                            })
+                            .collect();
+
+                        let tool_list = tools.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
+
+                        let agent_id = coordinator.register_agent(
+                            name.clone(),
+                            caps,
+                            Some(model.clone()),
+                            tool_list,
+                        ).await?;
+
+                        // Update max_concurrent
+                        storage.update_agent_status(&agent_id, "active").await?;
+
+                        println!("Agent '{}' created (id: {})", name, agent_id);
+                        println!("  Model: {}", model);
+                        println!("  Max concurrent: {}", max_concurrent);
+                    }
+
+                    SwarmAction::AgentLink { source, target, direction, max_concurrent } => {
+                        let dir = match direction.as_str() {
+                            "outbound" => LinkDirection::Outbound,
+                            "inbound" => LinkDirection::Inbound,
+                            "bidirectional" | "bidi" => LinkDirection::Bidirectional,
+                            _ => {
+                                eprintln!("Unknown direction: {} (use: outbound, inbound, bidirectional)", direction);
+                                std::process::exit(1);
+                            }
+                        };
+
+                        // Resolve names to IDs
+                        let src = storage.get_agent_by_name(&source).await?
+                            .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found", source))?;
+                        let tgt = storage.get_agent_by_name(&target).await?
+                            .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found", target))?;
+
+                        let link = coordinator.delegation.create_link(
+                            &src.agent_id, &tgt.agent_id, dir, max_concurrent,
+                        ).await?;
+
+                        println!("Link created: {} -> {} ({}, max {})",
+                            source, target, direction, max_concurrent);
+                        println!("  Link ID: {}", link.link_id);
+                    }
+
+                    SwarmAction::TeamCreate { name, lead } => {
+                        let lead_agent = storage.get_agent_by_name(&lead).await?
+                            .ok_or_else(|| anyhow::anyhow!("Lead agent '{}' not found", lead))?;
+
+                        let team = coordinator.teams.create_team(&name, &lead_agent.agent_id).await?;
+                        println!("Team '{}' created (id: {})", name, team.team_id);
+                        println!("  Lead: {}", lead);
+                    }
+
+                    SwarmAction::TeamTaskAdd { team, subject, priority, blocked_by } => {
+                        let team_obj = coordinator.teams.get_team_by_name(&team).await?
+                            .ok_or_else(|| anyhow::anyhow!("Team '{}' not found", team))?;
+
+                        let blockers = blocked_by
+                            .map(|b| b.split(',').map(|s| s.trim().to_string()).collect())
+                            .unwrap_or_default();
+
+                        let task = coordinator.teams.create_task(
+                            &team_obj.team_id, &subject, None, priority, blockers,
+                        ).await?;
+                        println!("Task added to team '{}': {} (id: {})", team, subject, task.task_id);
+                    }
+
+                    SwarmAction::Agents => {
+                        let agents = coordinator.list_all_agents().await?;
+                        if agents.is_empty() {
+                            println!("No agents registered.");
+                        } else {
+                            println!("{:<20} {:<12} {:<25} {:<10}", "NAME", "STATUS", "MODEL", "MAX_CONC");
+                            for a in &agents {
+                                println!("{:<20} {:<12} {:<25} {:<10}",
+                                    a.name,
+                                    a.status.to_string(),
+                                    a.model.as_deref().unwrap_or("-"),
+                                    a.max_concurrent.unwrap_or(5),
+                                );
+                            }
+                        }
+                    }
+
+                    SwarmAction::Tasks => {
+                        let tasks = coordinator.list_pending_tasks().await?;
+                        if tasks.is_empty() {
+                            println!("No pending tasks.");
+                        } else {
+                            for t in &tasks {
+                                println!("[{:?}] {} — {}", t.priority, t.title, t.status.to_string());
+                            }
+                        }
+                    }
+
+                    SwarmAction::Teams => {
+                        let teams = coordinator.teams.list_teams().await?;
+                        if teams.is_empty() {
+                            println!("No teams.");
+                        } else {
+                            for t in &teams {
+                                let members = coordinator.teams.list_members(&t.team_id).await?;
+                                println!("{} (lead: {}, members: {}, status: {})",
+                                    t.name, t.lead_agent_id, members.len(), t.status);
+                            }
+                        }
+                    }
+
+                    SwarmAction::Delegations { agent } => {
+                        let agent_obj = storage.get_agent_by_name(&agent).await?
+                            .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found", agent))?;
+                        let delegations = coordinator.delegation.list_active(&agent_obj.agent_id).await?;
+                        if delegations.is_empty() {
+                            println!("No active delegations for '{}'.", agent);
+                        } else {
+                            for d in &delegations {
+                                println!("[{}] {} -> {} ({:?}): {}",
+                                    d.status, d.source_agent_id, d.target_agent_id, d.mode, d.task);
+                            }
+                        }
+                    }
+
+                    SwarmAction::Task { description, priority, title } => {
+                        let prio = match priority.as_str() {
+                            "low" => TaskPriority::Low,
+                            "medium" => TaskPriority::Medium,
+                            "high" => TaskPriority::High,
+                            "critical" => TaskPriority::Critical,
+                            _ => TaskPriority::Medium,
+                        };
+                        let title = title.unwrap_or_else(|| description.lines().next().unwrap_or(&description).to_string());
+                        let task_id = coordinator.submit_task(title.clone(), description, prio).await?;
+                        println!("Task submitted: {} (id: {})", title, task_id);
+                    }
+
+                    SwarmAction::Queue { message } => {
+                        coordinator.queue_message(message.clone()).await;
+                        println!("Message queued: {}", message);
+                    }
+
+                    SwarmAction::Status => {
+                        let status = coordinator.scheduler.get_status().await;
+                        println!("Scheduler Status:");
+                        for (lane, (active, max)) in &status.lane_usage {
+                            println!("  {}: {}/{}", lane, active, max);
+                        }
+                        if !status.deadlocks.is_empty() {
+                            println!("\nDEADLOCKS DETECTED:");
+                            for cycle in &status.deadlocks {
+                                println!("  Cycle: {}", cycle.join(" -> "));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
