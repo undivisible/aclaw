@@ -29,6 +29,8 @@ const MAX_TOOL_RESULT_CHARS: usize = 20_000;
 const MAX_CONTEXT_CHARS: usize = 150_000;
 /// Fast/cheap model for planning + summarization
 const FAST_MODEL: &str = "claude-haiku-4-5";
+/// Heavy model for complex coding/reasoning
+const HEAVY_MODEL: &str = "claude-opus-4";
 
 /// Agent execution state machine
 #[derive(Debug, Clone, PartialEq)]
@@ -301,13 +303,25 @@ impl AgentRunner {
         let mut state = if needs_tools { AgentState::Planning } else { AgentState::Direct };
         tracing::info!("Initial state: {:?}", state);
 
-        // Step 2: If planning, ask Haiku to make a plan
+        // Step 2: If planning, ask Haiku to make a plan + choose execution model
         let mut plan: Option<String> = None;
+        let mut execution_model = main_model.clone(); // Default to configured model (sonnet)
+
         if state == AgentState::Planning {
             let plan_prompt = format!(
-                "You are a planning assistant. Analyze this request and create a brief, \
-                numbered step-by-step plan for what tools to use and in what order. \
-                Be concise — just the steps, no explanation.\n\n\
+                "You are a planning assistant. Analyze this request and output TWO things:\n\n\
+                1. MODEL_CHOICE: Pick ONE execution model:\n\
+                   - SONNET: for general tasks, file ops, web, simple edits, queries\n\
+                   - OPUS: for complex coding, architecture, multi-file refactors, debugging hard bugs\n\
+                   - VIBEMANIA: for building features, creating projects, coding tasks that need autonomous agents\n\n\
+                2. PLAN: A brief numbered step-by-step plan.\n\
+                   - If VIBEMANIA: the plan should be a single step: delegate to vibemania/subspace with the goal\n\
+                   - If SONNET/OPUS: list what tools to use and in what order\n\n\
+                Format your response EXACTLY like:\n\
+                MODEL_CHOICE: SONNET\n\
+                PLAN:\n\
+                1. step one\n\
+                2. step two\n\n\
                 Available tools: {}\n\n\
                 User request: {}",
                 tool_specs.iter().map(|t| format!("{} ({})", t.name, t.description.chars().take(50).collect::<String>())).collect::<Vec<_>>().join(", "),
@@ -325,7 +339,8 @@ impl AgentRunner {
             match self.provider.chat(&plan_request).await {
                 Ok(resp) => {
                     let p = resp.text.unwrap_or_default();
-                    tracing::info!("Plan from Haiku: {}", &p[..p.len().min(200)]);
+                    tracing::info!("Plan: {}", &p[..p.len().min(300)]);
+
                     // Track cost
                     if let Some(usage) = &resp.usage {
                         let _ = self.cost_tracker.record(FAST_MODEL, TokenUsage {
@@ -334,7 +349,25 @@ impl AgentRunner {
                             total_tokens: (usage.input_tokens + usage.output_tokens) as usize,
                         }).await;
                     }
-                    // Inject plan into context
+
+                    // Parse model choice from plan
+                    let p_upper = p.to_uppercase();
+                    if p_upper.contains("MODEL_CHOICE: OPUS") || p_upper.contains("MODEL_CHOICE:OPUS") {
+                        execution_model = HEAVY_MODEL.to_string();
+                        tracing::info!("Planner chose OPUS for execution");
+                    } else if p_upper.contains("MODEL_CHOICE: VIBEMANIA") || p_upper.contains("MODEL_CHOICE:VIBEMANIA") {
+                        // Route to vibemania — inject directive
+                        tracing::info!("Planner chose VIBEMANIA — routing to subspace");
+                        messages.push(ChatMessage::system(
+                            "IMPORTANT: This is a coding task. Use the `exec` tool to run vibemania/subspace \
+                            to handle this autonomously. Command: \
+                            `cd <project_dir> && subspace run \"<goal>\" --parallel 3`\n\
+                            Do NOT write code yourself — delegate to subspace.".to_string()
+                        ));
+                    }
+                    // else: stays as main_model (sonnet)
+
+                    // Inject plan
                     messages.push(ChatMessage::system(format!(
                         "EXECUTION PLAN (follow these steps):\n{}", p
                     )));
@@ -377,7 +410,7 @@ impl AgentRunner {
             // Select model + temperature based on state
             let (model, temperature) = match state {
                 AgentState::Planning => (FAST_MODEL.to_string(), 0.8),
-                AgentState::Executing => (main_model.clone(), 0.2),
+                AgentState::Executing => (execution_model.clone(), 0.2),
                 AgentState::Summarizing => (FAST_MODEL.to_string(), 0.7),
                 AgentState::Direct => (main_model.clone(), 0.7),
             };
