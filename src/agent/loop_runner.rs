@@ -30,7 +30,7 @@ const MAX_TOOL_RESULT_CHARS: usize = 20_000;
 /// Max context chars before triggering mid-loop compaction
 const MAX_CONTEXT_CHARS: usize = 150_000;
 /// Haiku model for compaction (fast + cheap)
-const COMPACTION_MODEL: &str = "claude-3-5-haiku-20241022";
+const COMPACTION_MODEL: &str = "claude-haiku-4-5";
 
 /// Progress update sent during agent processing
 #[derive(Debug, Clone)]

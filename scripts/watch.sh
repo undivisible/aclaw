@@ -9,7 +9,7 @@ LOG="/tmp/aclaw.log"
 PIDFILE="/tmp/unthinkclaw.pid"
 
 # Launch args (mirror production)
-TELEGRAM_TOKEN="8756921061:AAGddz9nxAFXyxNnzwBMuuBe1Fb5SIRGMxE"
+TELEGRAM_TOKEN="${TELEGRAM_TOKEN:?set TELEGRAM_TOKEN env var}"
 TELEGRAM_CHAT_ID="5708941906"
 MODEL="${MODEL:-claude-sonnet-4-5}"
 BIN="$REPO/target/release/unthinkclaw"
