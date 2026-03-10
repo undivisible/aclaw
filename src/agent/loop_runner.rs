@@ -15,9 +15,7 @@ use crate::providers::{ChatMessage, ChatRequest, Provider};
 use crate::skills;
 use crate::tools::Tool;
 
-/// Compact conversation after this many rounds (uses Haiku to summarize)
-const COMPACTION_THRESHOLD: usize = 15;
-/// Hard circuit breaker (absolute max rounds)
+/// Hard circuit breaker (absolute max execution rounds)
 const CIRCUIT_BREAKER_ROUNDS: usize = 50;
 /// Warn the LLM after this many identical tool calls
 const LOOP_WARN_THRESHOLD: usize = 5;
@@ -29,8 +27,21 @@ const MAX_HISTORY_MESSAGES: usize = 8;
 const MAX_TOOL_RESULT_CHARS: usize = 20_000;
 /// Max context chars before triggering mid-loop compaction
 const MAX_CONTEXT_CHARS: usize = 150_000;
-/// Haiku model for compaction (fast + cheap)
-const COMPACTION_MODEL: &str = "claude-haiku-4-5";
+/// Fast/cheap model for planning + summarization
+const FAST_MODEL: &str = "claude-haiku-4-5";
+
+/// Agent execution state machine
+#[derive(Debug, Clone, PartialEq)]
+enum AgentState {
+    /// Planning: Haiku analyzes the request, makes a plan (temp 0.8)
+    Planning,
+    /// Executing: Sonnet follows the plan, calls tools (temp 0.2)
+    Executing,
+    /// Summarizing: Haiku compacts results into final response (temp 0.7)
+    Summarizing,
+    /// Direct: Simple query, no planning needed — use main model (temp 0.7)
+    Direct,
+}
 
 /// Progress update sent during agent processing
 #[derive(Debug, Clone)]
@@ -274,13 +285,70 @@ impl AgentRunner {
         // Add new user message
         messages.push(ChatMessage::user(&msg.text));
 
-        // Tool specs — snapshot at message start (hot-reload takes effect next message)
+        // Tool specs — snapshot at message start
         let tool_specs: Vec<crate::tools::ToolSpec> = self.tools.read().await.iter()
             .map(|t| t.spec())
             .collect();
         let tools_snapshot: Vec<Arc<dyn Tool>> = self.tools.read().await.iter().cloned().collect();
+        let main_model = self.model.read().unwrap().clone();
 
-        // Agent loop with compaction
+        // ═══════════════════════════════════════════════════════
+        // STATE MACHINE: Planning → Executing → Summarizing
+        // ═══════════════════════════════════════════════════════
+
+        // Step 1: Decide if this needs planning or is a direct response
+        let needs_tools = self.classify_request(&msg.text, &main_model).await;
+        let mut state = if needs_tools { AgentState::Planning } else { AgentState::Direct };
+        tracing::info!("Initial state: {:?}", state);
+
+        // Step 2: If planning, ask Haiku to make a plan
+        let mut plan: Option<String> = None;
+        if state == AgentState::Planning {
+            let plan_prompt = format!(
+                "You are a planning assistant. Analyze this request and create a brief, \
+                numbered step-by-step plan for what tools to use and in what order. \
+                Be concise — just the steps, no explanation.\n\n\
+                Available tools: {}\n\n\
+                User request: {}",
+                tool_specs.iter().map(|t| format!("{} ({})", t.name, t.description.chars().take(50).collect::<String>())).collect::<Vec<_>>().join(", "),
+                &msg.text
+            );
+
+            let plan_request = ChatRequest {
+                messages: vec![ChatMessage::user(&plan_prompt)],
+                tools: None,
+                model: FAST_MODEL.to_string(),
+                temperature: 0.8,
+                max_tokens: Some(500),
+            };
+
+            match self.provider.chat(&plan_request).await {
+                Ok(resp) => {
+                    let p = resp.text.unwrap_or_default();
+                    tracing::info!("Plan from Haiku: {}", &p[..p.len().min(200)]);
+                    // Track cost
+                    if let Some(usage) = &resp.usage {
+                        let _ = self.cost_tracker.record(FAST_MODEL, TokenUsage {
+                            input_tokens: usage.input_tokens as usize,
+                            output_tokens: usage.output_tokens as usize,
+                            total_tokens: (usage.input_tokens + usage.output_tokens) as usize,
+                        }).await;
+                    }
+                    // Inject plan into context
+                    messages.push(ChatMessage::system(format!(
+                        "EXECUTION PLAN (follow these steps):\n{}", p
+                    )));
+                    plan = Some(p);
+                    state = AgentState::Executing;
+                }
+                Err(e) => {
+                    tracing::warn!("Planning failed ({}), falling back to direct", e);
+                    state = AgentState::Direct;
+                }
+            }
+        }
+
+        // Step 3: Execute (tool loop)
         let mut tool_call_history: Vec<String> = Vec::new();
         let mut compactions_done: usize = 0;
 
@@ -290,7 +358,7 @@ impl AgentRunner {
                 let mut queue = self.steering_queue.lock().unwrap();
                 if !queue.is_empty() {
                     for steer_msg in queue.drain(..) {
-                        tracing::info!("Steering message injected: {}", &steer_msg[..steer_msg.len().min(80)]);
+                        tracing::info!("Steering: {}", &steer_msg[..steer_msg.len().min(80)]);
                         messages.push(ChatMessage::user(format!(
                             "⚡ STEERING — new instruction from user (prioritize this): {}", steer_msg
                         )));
@@ -298,91 +366,98 @@ impl AgentRunner {
                 }
             }
 
-            // Mid-loop compaction: if context is too large or we hit the threshold
+            // Context budget check — compact if too large
             let context_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-            if (round > 0 && round % COMPACTION_THRESHOLD == 0) || context_chars > MAX_CONTEXT_CHARS {
-                tracing::info!("Compacting conversation at round {} ({} chars, {} msgs)", 
-                    round + 1, context_chars, messages.len());
+            if context_chars > MAX_CONTEXT_CHARS {
+                tracing::info!("Compacting at round {} ({} chars)", round + 1, context_chars);
                 messages = self.compact_messages(messages, &msg.text).await?;
                 compactions_done += 1;
-                tracing::info!("Compacted to {} msgs, {} chars", 
-                    messages.len(), 
-                    messages.iter().map(|m| m.content.len()).sum::<usize>());
             }
 
-            tracing::info!("Agent round {} — {} messages, ~{} chars", 
-                round + 1, messages.len(),
-                messages.iter().map(|m| m.content.len()).sum::<usize>());
+            // Select model + temperature based on state
+            let (model, temperature) = match state {
+                AgentState::Planning => (FAST_MODEL.to_string(), 0.8),
+                AgentState::Executing => (main_model.clone(), 0.2),
+                AgentState::Summarizing => (FAST_MODEL.to_string(), 0.7),
+                AgentState::Direct => (main_model.clone(), 0.7),
+            };
 
-            // Adaptive temperature:
-            // - Round 0 (first response): higher temp for natural conversation
-            // - Subsequent rounds (tool loop): low temp for precision
-            let temperature = if round == 0 { 0.7 } else { 0.2 };
+            tracing::info!("[{:?}] round {} — {} msgs, ~{} chars, model={}", 
+                state, round + 1, messages.len(),
+                messages.iter().map(|m| m.content.len()).sum::<usize>(), model);
 
             let request = ChatRequest {
                 messages: messages.clone(),
-                tools: if tool_specs.is_empty() { None } else { Some(tool_specs.clone()) },
-                model: self.model.read().unwrap().clone(),
+                tools: if tool_specs.is_empty() || state == AgentState::Summarizing {
+                    None // No tools during summarization
+                } else {
+                    Some(tool_specs.clone())
+                },
+                model: model.clone(),
                 temperature,
                 max_tokens: Some(8192),
             };
 
             let response = self.provider.chat(&request).await?;
 
-            // Track cost if usage is available
+            // Track cost
             if let Some(usage) = &response.usage {
-                let _ = self.cost_tracker.record(
-                    &self.model.read().unwrap(),
-                    TokenUsage {
-                        input_tokens: usage.input_tokens as usize,
-                        output_tokens: usage.output_tokens as usize,
-                        total_tokens: (usage.input_tokens + usage.output_tokens) as usize,
-                    }
-                ).await;
+                let _ = self.cost_tracker.record(&model, TokenUsage {
+                    input_tokens: usage.input_tokens as usize,
+                    output_tokens: usage.output_tokens as usize,
+                    total_tokens: (usage.input_tokens + usage.output_tokens) as usize,
+                }).await;
             }
 
             if !response.has_tool_calls() {
-                // Done — return text and persist to history
-                tracing::info!("Agent done after {} round(s)", round + 1);
                 let text = response.text.unwrap_or_default();
 
-                // Store user message to SQLite
-                self.memory.store_conversation(
-                    &msg.chat_id,
-                    &msg.sender_id,
-                    "user",
-                    &msg.text,
-                ).await?;
-
-                // Store assistant response to SQLite
-                self.memory.store_conversation(
-                    &msg.chat_id,
-                    "assistant",
-                    "assistant",
-                    &text,
-                ).await?;
-
-                return Ok(text);
+                // State transitions on no tool calls
+                match state {
+                    AgentState::Executing => {
+                        // Execution done — summarize with Haiku if we did significant work
+                        if round >= 3 {
+                            tracing::info!("Execution done after {} rounds, summarizing", round + 1);
+                            state = AgentState::Summarizing;
+                            messages.push(ChatMessage::assistant(text));
+                            messages.push(ChatMessage::user(
+                                "Now provide a clean, concise final response to the user. \
+                                Summarize what you did and the results. Be brief and direct.".to_string()
+                            ));
+                            continue; // One more round with Haiku for summary
+                        }
+                        // Short execution — return directly
+                        tracing::info!("Done after {} round(s) [{:?}]", round + 1, state);
+                        self.persist_conversation(&msg, &text).await?;
+                        return Ok(text);
+                    }
+                    AgentState::Summarizing | AgentState::Direct | AgentState::Planning => {
+                        tracing::info!("Done after {} round(s) [{:?}]", round + 1, state);
+                        self.persist_conversation(&msg, &text).await?;
+                        return Ok(text);
+                    }
+                }
             }
+
+            // === TOOL EXECUTION (only in Executing or Direct state) ===
 
             // Loop detection
             for tc in &response.tool_calls {
-                let hash = format!("{}:{}", tc.name, tc.arguments);
+                let hash = format!("{}:{}", tc.name, &tc.arguments[..tc.arguments.len().min(200)]);
                 tool_call_history.push(hash);
             }
             if tool_call_history.len() >= LOOP_BREAK_THRESHOLD {
                 let last = &tool_call_history[tool_call_history.len() - 1];
                 let consecutive = tool_call_history.iter().rev().take_while(|h| *h == last).count();
                 if consecutive >= LOOP_BREAK_THRESHOLD {
-                    tracing::warn!("Loop detected: {} identical calls, breaking", consecutive);
-                    return Ok(format!("Got stuck in a loop calling {} {} times. Try rephrasing?",
-                        response.tool_calls[0].name, consecutive));
+                    tracing::warn!("Loop: {} identical calls, breaking", consecutive);
+                    return Ok(format!("Loop detected ({} identical {} calls). Stopping.",
+                        consecutive, response.tool_calls[0].name));
                 }
                 if consecutive >= LOOP_WARN_THRESHOLD {
-                    messages.push(ChatMessage::user(format!(
-                        "WARNING: You called {} {} times identically. Stop retrying and answer with what you have.",
-                        response.tool_calls[0].name, consecutive
-                    )));
+                    messages.push(ChatMessage::user(
+                        "WARNING: You're repeating tool calls. Stop and answer with what you have.".to_string()
+                    ));
                 }
             }
 
@@ -396,14 +471,13 @@ impl AgentRunner {
                 }
             }
 
-            // Build assistant message with tool_use content blocks
+            // Build assistant tool_use message
             {
                 let mut content_blocks: Vec<serde_json::Value> = Vec::new();
                 if let Some(text) = &response.text {
                     if !text.is_empty() {
                         content_blocks.push(serde_json::json!({
-                            "type": "text",
-                            "text": text,
+                            "type": "text", "text": text,
                         }));
                     }
                 }
@@ -422,8 +496,8 @@ impl AgentRunner {
                 });
             }
 
-            // Execute each tool call
-            tracing::info!("Tool calls: {}",
+            // Execute tools
+            tracing::info!("Tools: {}",
                 response.tool_calls.iter().map(|tc| tc.name.as_str()).collect::<Vec<_>>().join(", "));
 
             for tc in &response.tool_calls {
@@ -436,35 +510,61 @@ impl AgentRunner {
                     crate::tools::ToolResult::error(format!("Unknown tool: {}", tc.name))
                 };
 
-                // TRUNCATE tool result to save tokens (OpenClaw-style)
                 let truncated_output = if result.output.len() > MAX_TOOL_RESULT_CHARS {
-                    format!(
-                        "{}...\n⚠️ [Truncated from {} to {} chars. Use offset/limit params.]",
-                        &result.output[..MAX_TOOL_RESULT_CHARS],
-                        result.output.len(),
-                        MAX_TOOL_RESULT_CHARS
-                    )
+                    format!("{}...\n⚠️ [Truncated {} → {} chars]",
+                        &result.output[..MAX_TOOL_RESULT_CHARS], result.output.len(), MAX_TOOL_RESULT_CHARS)
                 } else {
                     result.output.clone()
                 };
 
                 messages.push(ChatMessage::tool_result(&tc.id, &truncated_output));
             }
+
+            // After first tool response in Direct mode, switch to Executing
+            if state == AgentState::Direct {
+                state = AgentState::Executing;
+            }
         }
 
-        tracing::warn!("Circuit breaker after {} rounds ({} compactions)", CIRCUIT_BREAKER_ROUNDS, compactions_done);
-        
+        tracing::warn!("Circuit breaker after {} rounds", CIRCUIT_BREAKER_ROUNDS);
+        self.persist_conversation(&msg, &format!("Hit {} rounds.", CIRCUIT_BREAKER_ROUNDS)).await?;
+        Ok(format!("⚠️ Hit {} rounds ({} compactions). Break into smaller tasks?",
+            CIRCUIT_BREAKER_ROUNDS, compactions_done))
+    }
+
+    /// Classify if a request needs tool calls (and thus planning) or is conversational
+    async fn classify_request(&self, text: &str, _model: &str) -> bool {
+        // Heuristic: if message is short and conversational, skip planning
+        let lower = text.to_lowercase();
+        let word_count = text.split_whitespace().count();
+
+        // Short messages are usually conversational
+        if word_count <= 5 { return false; }
+
+        // Explicit tool-needing keywords
+        let tool_keywords = [
+            "read ", "write ", "edit ", "create ", "build ", "fix ", "search ",
+            "fetch ", "check ", "run ", "execute ", "install ", "deploy ",
+            "find ", "list ", "show me ", "what's in ", "look at ",
+            "file", "code", "commit", "git ", "grep", "curl",
+        ];
+        for kw in &tool_keywords {
+            if lower.contains(kw) { return true; }
+        }
+
+        // Longer messages with questions are likely complex tasks
+        if word_count >= 15 && (lower.contains('?') || lower.contains("can you") || lower.contains("please")) {
+            return true;
+        }
+
+        false
+    }
+
+    /// Persist user + assistant messages to conversation history
+    async fn persist_conversation(&self, msg: &IncomingMessage, response: &str) -> anyhow::Result<()> {
         self.memory.store_conversation(&msg.chat_id, &msg.sender_id, "user", &msg.text).await?;
-        self.memory.store_conversation(
-            &msg.chat_id, "assistant", "assistant",
-            &format!("Hit {} rounds ({} compactions). Task may need to be broken down.", 
-                CIRCUIT_BREAKER_ROUNDS, compactions_done),
-        ).await?;
-        
-        Ok(format!(
-            "⚠️ Hit {} rounds ({} compactions performed). Break this into smaller tasks?",
-            CIRCUIT_BREAKER_ROUNDS, compactions_done
-        ))
+        self.memory.store_conversation(&msg.chat_id, "assistant", "assistant", response).await?;
+        Ok(())
     }
 
     /// Compact conversation using Haiku — summarize old messages, keep recent ones
@@ -526,7 +626,7 @@ impl AgentRunner {
                 ChatMessage::user(&compaction_prompt),
             ],
             tools: None,
-            model: COMPACTION_MODEL.to_string(),
+            model: FAST_MODEL.to_string(),
             temperature: 0.3,
             max_tokens: Some(1000),
         };
