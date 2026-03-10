@@ -57,7 +57,7 @@ impl Tool for SessionStatusTool {
             return Ok(ToolResult::success(format!("Model switched to: {}", model)));
         }
 
-        let tools = self.runner.list_tools();
+        let tools = self.runner.list_tools().await;
         let status = format!(
             "Session Status:\n\
             Model: {}\n\

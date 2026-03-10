@@ -366,14 +366,14 @@ async fn main() -> anyhow::Result<()> {
                 println!("   Loaded {} custom tool(s)", dynamic_count);
             }
 
-            let mut runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
+            let runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
                 .with_workspace(workspace.clone())
-                .with_skills(discovered_skills.clone());
+                .with_skills(discovered_skills.clone()).await;
             
             // Add claude_usage tool (needs cost tracker reference)
             runner.add_tool(Arc::new(unthinkclaw::tools::claude_usage::ClaudeUsageTool::new(
                 runner.cost_tracker()
-            )));
+            ))).await;
 
             // Start cron scheduler background task
             let cron_db_path = workspace.join(".unthinkclaw/cron.db");
@@ -412,7 +412,7 @@ async fn main() -> anyhow::Result<()> {
                     let tg_arc = Arc::new(tg.clone());
 
                     // Add late-binding tools that need references
-                    runner.add_tool(Arc::new(unthinkclaw::tools::message::MessageTool::new(tg_arc.clone())));
+                    runner.add_tool(Arc::new(unthinkclaw::tools::message::MessageTool::new(tg_arc.clone()))).await;
 
                     // Wrap runner in Arc for session_status
                     let runner = Arc::new(runner);
@@ -421,7 +421,7 @@ async fn main() -> anyhow::Result<()> {
 
                     println!("unthinkclaw — {} via Telegram", cfg.model);
                     println!("   Chat ID: {}", chat_id);
-                    println!("   Tools: {}", runner.list_tools().join(", "));
+                    println!("   Tools: {}", runner.list_tools().await.join(", "));
                     println!("   Listening for messages...");
                     let mut ch = TelegramChannel::new(token, chat_id);
                     let mut rx = ch.start().await?;
@@ -489,7 +489,7 @@ async fn main() -> anyhow::Result<()> {
                                     continue;
                                 }
                                 "/tools" => {
-                                    let tool_list = runner.list_tools();
+                                    let tool_list = runner.list_tools().await;
                                     let formatted = tool_list.iter()
                                         .map(|t| format!("• `{}`", t))
                                         .collect::<Vec<_>>()
@@ -509,7 +509,7 @@ async fn main() -> anyhow::Result<()> {
                                         Channel: Telegram\n\
                                         PID: {}",
                                         runner.get_model(),
-                                        runner.list_tools().len(),
+                                        runner.list_tools().await.len(),
                                         discovered_skills.len(),
                                         std::process::id(),
                                     )).await;

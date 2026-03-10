@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 
 use crate::channels::{Channel, IncomingMessage, OutgoingMessage};
 use crate::cost::{CostTracker, TokenUsage};
@@ -44,12 +45,15 @@ pub enum ProgressUpdate {
 
 pub struct AgentRunner {
     provider: Arc<dyn Provider>,
-    tools: Vec<Arc<dyn Tool>>,
+    /// Hot-reloadable tools list — shared with watcher + create_tool
+    pub tools: Arc<RwLock<Vec<Arc<dyn Tool>>>>,
     memory: Arc<dyn MemoryBackend>,
-    system_prompt: String,
+    /// Hot-reloadable system prompt — updated when MEMORY.md / context files change
+    pub system_prompt: Arc<RwLock<String>>,
     model: std::sync::RwLock<String>,
     workspace: PathBuf,
-    skills: Vec<skills::Skill>,
+    /// Hot-reloadable skills — re-discovered when skills/ dir changes
+    pub skills: Arc<RwLock<Vec<skills::Skill>>>,
     cost_tracker: Arc<CostTracker>,
     /// Steering messages — injected into the loop between rounds
     pub steering_queue: Arc<std::sync::Mutex<Vec<String>>>,
@@ -65,12 +69,12 @@ impl AgentRunner {
     ) -> Self {
         Self {
             provider,
-            tools,
+            tools: Arc::new(RwLock::new(tools)),
             memory,
-            system_prompt: system_prompt.into(),
+            system_prompt: Arc::new(RwLock::new(system_prompt.into())),
             model: std::sync::RwLock::new(model.into()),
             workspace: PathBuf::from("."),
-            skills: Vec::new(),
+            skills: Arc::new(RwLock::new(Vec::new())),
             cost_tracker: Arc::new(CostTracker::new()),
             steering_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
@@ -86,8 +90,8 @@ impl AgentRunner {
         self
     }
 
-    pub fn with_skills(mut self, skills: Vec<skills::Skill>) -> Self {
-        self.skills = skills;
+    pub async fn with_skills(self, skills: Vec<skills::Skill>) -> Self {
+        *self.skills.write().await = skills;
         self
     }
 
@@ -112,13 +116,13 @@ impl AgentRunner {
     }
 
     /// List available tools
-    pub fn list_tools(&self) -> Vec<String> {
-        self.tools.iter().map(|t| t.name().to_string()).collect()
+    pub async fn list_tools(&self) -> Vec<String> {
+        self.tools.read().await.iter().map(|t| t.name().to_string()).collect()
     }
 
     /// Add a tool at runtime (for late-binding tools like session_status)
-    pub fn add_tool(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.push(tool);
+    pub async fn add_tool(&self, tool: Arc<dyn Tool>) {
+        self.tools.write().await.push(tool);
     }
 
     /// Run the agent loop on a channel.
@@ -240,16 +244,20 @@ impl AgentRunner {
         }
 
         // Build messages: system prompt + conversation history + new message
-        let mut messages = vec![ChatMessage::system(&self.system_prompt)];
+        let system_prompt = self.system_prompt.read().await.clone();
+        let mut messages = vec![ChatMessage::system(&system_prompt)];
 
         // Skill injection
-        if let Some(skill) = skills::match_skill(&self.skills, &msg.text) {
-            if let Some(content) = skills::load_skill_content(skill) {
-                messages.push(ChatMessage::system(format!(
-                    "# Active Skill: {}\n{}\n\nFollow the instructions above for this skill.",
-                    skill.name, content
-                )));
-                tracing::info!("Skill matched: {}", skill.name);
+        {
+            let skills = self.skills.read().await;
+            if let Some(skill) = skills::match_skill(&skills, &msg.text) {
+                if let Some(content) = skills::load_skill_content(skill) {
+                    messages.push(ChatMessage::system(format!(
+                        "# Active Skill: {}\n{}\n\nFollow the instructions above for this skill.",
+                        skill.name, content
+                    )));
+                    tracing::info!("Skill matched: {}", skill.name);
+                }
             }
         }
 
@@ -266,10 +274,11 @@ impl AgentRunner {
         // Add new user message
         messages.push(ChatMessage::user(&msg.text));
 
-        // Tool specs
-        let tool_specs: Vec<crate::tools::ToolSpec> = self.tools.iter()
+        // Tool specs — snapshot at message start (hot-reload takes effect next message)
+        let tool_specs: Vec<crate::tools::ToolSpec> = self.tools.read().await.iter()
             .map(|t| t.spec())
             .collect();
+        let tools_snapshot: Vec<Arc<dyn Tool>> = self.tools.read().await.iter().cloned().collect();
 
         // Agent loop with compaction
         let mut tool_call_history: Vec<String> = Vec::new();
@@ -413,7 +422,7 @@ impl AgentRunner {
                 response.tool_calls.iter().map(|tc| tc.name.as_str()).collect::<Vec<_>>().join(", "));
 
             for tc in &response.tool_calls {
-                let result = if let Some(tool) = self.tools.iter().find(|t| t.name() == tc.name) {
+                let result = if let Some(tool) = tools_snapshot.iter().find(|t| t.name() == tc.name) {
                     match tool.execute(&tc.arguments).await {
                         Ok(r) => r,
                         Err(e) => crate::tools::ToolResult::error(format!("Tool error: {}", e)),

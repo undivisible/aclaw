@@ -127,10 +127,10 @@ fn sanitize_markdown(text: &str) -> String {
         
         // Strip Markdown headers (Telegram doesn't support them)
         if trimmed.starts_with('#') {
-            // Convert headers to bold text
+            // Convert headers to bold text (Telegram Markdown uses single asterisks)
             let header_text = trimmed.trim_start_matches('#').trim();
             if !header_text.is_empty() {
-                result.push_str(&format!("**{}**\n", header_text));
+                result.push_str(&format!("*{}*\n", header_text));
             }
             continue;
         }
