@@ -44,13 +44,22 @@ impl CronScheduler {
                 enabled INTEGER NOT NULL DEFAULT 1,
                 last_run TEXT,
                 next_run TEXT
-            );"
+            );",
         )?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Add a new cron job. Returns the job ID.
-    pub fn add(&self, name: &str, schedule: &str, task: &str, channel: &str, model: &str) -> anyhow::Result<String> {
+    pub fn add(
+        &self,
+        name: &str,
+        schedule: &str,
+        task: &str,
+        channel: &str,
+        model: &str,
+    ) -> anyhow::Result<String> {
         // Validate cron expression
         let parsed = cron::Schedule::from_str(schedule)
             .map_err(|e| anyhow::anyhow!("Invalid cron expression: {}", e))?;
@@ -58,10 +67,7 @@ impl CronScheduler {
         let id = uuid::Uuid::new_v4().to_string();
 
         // Compute next run
-        let next_run = parsed
-            .upcoming(chrono::Utc)
-            .next()
-            .map(|t| t.to_rfc3339());
+        let next_run = parsed.upcoming(chrono::Utc).next().map(|t| t.to_rfc3339());
 
         let conn = self.conn.lock();
         conn.execute(
@@ -79,19 +85,22 @@ impl CronScheduler {
         let mut stmt = conn.prepare(
             "SELECT id, name, schedule, task, channel, model, enabled, last_run, next_run FROM cron_jobs ORDER BY name"
         )?;
-        let jobs = stmt.query_map([], |row| {
-            Ok(CronJob {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                schedule: row.get(2)?,
-                task: row.get(3)?,
-                channel: row.get(4)?,
-                model: row.get(5)?,
-                enabled: row.get::<_, i32>(6)? != 0,
-                last_run: row.get(7)?,
-                next_run: row.get(8)?,
-            })
-        })?.filter_map(|r| r.ok()).collect();
+        let jobs = stmt
+            .query_map([], |row| {
+                Ok(CronJob {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    schedule: row.get(2)?,
+                    task: row.get(3)?,
+                    channel: row.get(4)?,
+                    model: row.get(5)?,
+                    enabled: row.get::<_, i32>(6)? != 0,
+                    last_run: row.get(7)?,
+                    next_run: row.get(8)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(jobs)
     }
 
@@ -131,21 +140,24 @@ impl CronScheduler {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, name, schedule, task, channel, model, enabled, last_run, next_run
-             FROM cron_jobs WHERE enabled = 1 AND next_run IS NOT NULL AND next_run <= ?1"
+             FROM cron_jobs WHERE enabled = 1 AND next_run IS NOT NULL AND next_run <= ?1",
         )?;
-        let jobs = stmt.query_map(rusqlite::params![now], |row| {
-            Ok(CronJob {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                schedule: row.get(2)?,
-                task: row.get(3)?,
-                channel: row.get(4)?,
-                model: row.get(5)?,
-                enabled: row.get::<_, i32>(6)? != 0,
-                last_run: row.get(7)?,
-                next_run: row.get(8)?,
-            })
-        })?.filter_map(|r| r.ok()).collect();
+        let jobs = stmt
+            .query_map(rusqlite::params![now], |row| {
+                Ok(CronJob {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    schedule: row.get(2)?,
+                    task: row.get(3)?,
+                    channel: row.get(4)?,
+                    model: row.get(5)?,
+                    enabled: row.get::<_, i32>(6)? != 0,
+                    last_run: row.get(7)?,
+                    next_run: row.get(8)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(jobs)
     }
 
@@ -234,7 +246,9 @@ mod tests {
     #[test]
     fn test_add_and_list() {
         let sched = test_scheduler();
-        let id = sched.add("daily", "0 0 9 * * * *", "run daily report", "cli", "").unwrap();
+        let id = sched
+            .add("daily", "0 0 9 * * * *", "run daily report", "cli", "")
+            .unwrap();
         assert!(!id.is_empty());
 
         let jobs = sched.list().unwrap();
@@ -253,7 +267,9 @@ mod tests {
     #[test]
     fn test_remove() {
         let sched = test_scheduler();
-        sched.add("test", "0 0 9 * * * *", "task", "cli", "").unwrap();
+        sched
+            .add("test", "0 0 9 * * * *", "task", "cli", "")
+            .unwrap();
         assert!(sched.remove("test").unwrap());
         assert_eq!(sched.list().unwrap().len(), 0);
     }
@@ -261,7 +277,9 @@ mod tests {
     #[test]
     fn test_enable_disable() {
         let sched = test_scheduler();
-        let id = sched.add("test", "0 0 9 * * * *", "task", "cli", "").unwrap();
+        let id = sched
+            .add("test", "0 0 9 * * * *", "task", "cli", "")
+            .unwrap();
 
         sched.disable(&id).unwrap();
         let jobs = sched.list().unwrap();

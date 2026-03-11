@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub provider: ProviderConfig,
     pub model: String,
@@ -11,9 +12,12 @@ pub struct Config {
     pub workspace: PathBuf,
     pub runtime: RuntimeConfig,
     pub channel: ChannelConfig,
+    pub gateway: GatewayConfig,
+    pub policy: PolicyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProviderConfig {
     pub name: String,
     pub api_key: Option<String>,
@@ -21,6 +25,7 @@ pub struct ProviderConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RuntimeConfig {
     pub kind: String, // "native", "docker"
     pub docker_image: Option<String>,
@@ -28,9 +33,27 @@ pub struct RuntimeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChannelConfig {
     pub kind: String, // "cli", "telegram", "discord", "websocket"
     pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GatewayConfig {
+    pub bind: String,
+    pub auth_token: Option<String>,
+    pub enable_admin_api: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PolicyConfig {
+    pub allow_shell: bool,
+    pub allow_dynamic_tools: bool,
+    pub allow_plugin_shell: bool,
+    pub allow_plugin_git: bool,
 }
 
 impl Config {
@@ -59,6 +82,64 @@ impl Config {
                 kind: "cli".to_string(),
                 token: None,
             },
+            gateway: GatewayConfig::default(),
+            policy: PolicyConfig::default(),
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::default_config()
+    }
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            name: "anthropic".to_string(),
+            api_key: None,
+            base_url: None,
+        }
+    }
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            kind: "native".to_string(),
+            docker_image: None,
+            memory_limit_mb: None,
+        }
+    }
+}
+
+impl Default for ChannelConfig {
+    fn default() -> Self {
+        Self {
+            kind: "cli".to_string(),
+            token: None,
+        }
+    }
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            bind: "127.0.0.1:8080".to_string(),
+            auth_token: None,
+            enable_admin_api: false,
+        }
+    }
+}
+
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self {
+            allow_shell: true,
+            allow_dynamic_tools: true,
+            allow_plugin_shell: false,
+            allow_plugin_git: false,
         }
     }
 }

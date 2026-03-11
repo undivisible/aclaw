@@ -34,7 +34,12 @@ pub trait SwarmStorage: Send + Sync {
     // === Delegation History ===
     async fn record_delegation(&self, record: &DelegationRecord) -> Result<()>;
     async fn get_delegation(&self, delegation_id: &str) -> Result<Option<DelegationRecord>>;
-    async fn update_delegation_status(&self, delegation_id: &str, status: &str, result: Option<String>) -> Result<()>;
+    async fn update_delegation_status(
+        &self,
+        delegation_id: &str,
+        status: &str,
+        result: Option<String>,
+    ) -> Result<()>;
     async fn list_active_delegations(&self, agent_id: &str) -> Result<Vec<DelegationRecord>>;
     async fn count_active_delegations_for_link(&self, source: &str, target: &str) -> Result<usize>;
     async fn count_active_delegations_for_agent(&self, agent_id: &str) -> Result<usize>;
@@ -67,7 +72,8 @@ pub trait SwarmStorage: Send + Sync {
 
     // === Handoff Routes ===
     async fn set_handoff_route(&self, route: &HandoffRoute) -> Result<()>;
-    async fn get_handoff_route(&self, channel: &str, chat_id: &str) -> Result<Option<HandoffRoute>>;
+    async fn get_handoff_route(&self, channel: &str, chat_id: &str)
+        -> Result<Option<HandoffRoute>>;
     async fn clear_handoff_route(&self, channel: &str, chat_id: &str) -> Result<()>;
     async fn list_handoff_routes(&self) -> Result<Vec<HandoffRoute>>;
 }
@@ -215,7 +221,8 @@ const SCHEMA_SQL: &str = r#"
 impl SwarmStorage for SurrealBackend {
     // === Tasks ===
     async fn store_task(&self, task: &super::Task) -> Result<()> {
-        let _: Option<super::Task> = self.db
+        let _: Option<super::Task> = self
+            .db
             .create(("tasks", &*task.task_id))
             .content(task.clone())
             .await?;
@@ -223,7 +230,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn get_task(&self, task_id: &str) -> Result<Option<super::Task>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM tasks WHERE task_id = $task_id LIMIT 1")
             .bind(("task_id", task_id.to_string()))
             .await?;
@@ -249,7 +257,8 @@ impl SwarmStorage for SurrealBackend {
 
     // === Agents ===
     async fn register_agent(&self, agent: &super::AgentInfo) -> Result<()> {
-        let _: Option<super::AgentInfo> = self.db
+        let _: Option<super::AgentInfo> = self
+            .db
             .create(("agents", &*agent.agent_id))
             .content(agent.clone())
             .await?;
@@ -257,7 +266,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn get_agent(&self, agent_id: &str) -> Result<Option<super::AgentInfo>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM agents WHERE agent_id = $agent_id LIMIT 1")
             .bind(("agent_id", agent_id.to_string()))
             .await?;
@@ -266,7 +276,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn get_agent_by_name(&self, name: &str) -> Result<Option<super::AgentInfo>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM agents WHERE name = $name LIMIT 1")
             .bind(("name", name.to_string()))
             .await?;
@@ -275,14 +286,16 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn list_active_agents(&self) -> Result<Vec<super::AgentInfo>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM agents WHERE status = 'active'")
             .await?;
         Ok(result.take(0)?)
     }
 
     async fn list_all_agents(&self) -> Result<Vec<super::AgentInfo>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM agents ORDER BY name ASC")
             .await?;
         Ok(result.take(0)?)
@@ -307,7 +320,8 @@ impl SwarmStorage for SurrealBackend {
 
     // === Agent Links ===
     async fn create_agent_link(&self, link: &AgentLink) -> Result<()> {
-        let _: Option<AgentLink> = self.db
+        let _: Option<AgentLink> = self
+            .db
             .create(("agent_links", &*link.link_id))
             .content(link.clone())
             .await?;
@@ -349,7 +363,8 @@ impl SwarmStorage for SurrealBackend {
 
     // === Delegation History ===
     async fn record_delegation(&self, record: &DelegationRecord) -> Result<()> {
-        let _: Option<DelegationRecord> = self.db
+        let _: Option<DelegationRecord> = self
+            .db
             .create(("delegation_history", &*record.delegation_id))
             .content(record.clone())
             .await?;
@@ -357,7 +372,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn get_delegation(&self, delegation_id: &str) -> Result<Option<DelegationRecord>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM delegation_history WHERE delegation_id = $id LIMIT 1")
             .bind(("id", delegation_id.to_string()))
             .await?;
@@ -365,7 +381,12 @@ impl SwarmStorage for SurrealBackend {
         Ok(records.into_iter().next())
     }
 
-    async fn update_delegation_status(&self, delegation_id: &str, status: &str, result: Option<String>) -> Result<()> {
+    async fn update_delegation_status(
+        &self,
+        delegation_id: &str,
+        status: &str,
+        result: Option<String>,
+    ) -> Result<()> {
         self.db
             .query("UPDATE delegation_history SET status = $status, result = $result, completed_at = time::now() WHERE delegation_id = $id")
             .bind(("id", delegation_id.to_string()))
@@ -390,7 +411,9 @@ impl SwarmStorage for SurrealBackend {
             .bind(("target", target.to_string()))
             .await?;
         #[derive(Deserialize)]
-        struct Count { total: usize }
+        struct Count {
+            total: usize,
+        }
         let counts: Vec<Count> = result.take(0)?;
         Ok(counts.first().map(|c| c.total).unwrap_or(0))
     }
@@ -401,14 +424,17 @@ impl SwarmStorage for SurrealBackend {
             .bind(("id", agent_id.to_string()))
             .await?;
         #[derive(Deserialize)]
-        struct Count { total: usize }
+        struct Count {
+            total: usize,
+        }
         let counts: Vec<Count> = result.take(0)?;
         Ok(counts.first().map(|c| c.total).unwrap_or(0))
     }
 
     // === Teams ===
     async fn create_team(&self, team: &Team) -> Result<()> {
-        let _: Option<Team> = self.db
+        let _: Option<Team> = self
+            .db
             .create(("teams", &*team.team_id))
             .content(team.clone())
             .await?;
@@ -416,7 +442,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn get_team(&self, team_id: &str) -> Result<Option<Team>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM teams WHERE team_id = $id LIMIT 1")
             .bind(("id", team_id.to_string()))
             .await?;
@@ -425,7 +452,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn get_team_by_name(&self, name: &str) -> Result<Option<Team>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM teams WHERE name = $name LIMIT 1")
             .bind(("name", name.to_string()))
             .await?;
@@ -434,7 +462,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn list_teams(&self) -> Result<Vec<Team>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM teams ORDER BY created_at DESC")
             .await?;
         Ok(result.take(0)?)
@@ -442,7 +471,8 @@ impl SwarmStorage for SurrealBackend {
 
     async fn add_team_member(&self, member: &TeamMember) -> Result<()> {
         let key = format!("{}_{}", member.team_id, member.agent_id);
-        let _: Option<TeamMember> = self.db
+        let _: Option<TeamMember> = self
+            .db
             .create(("team_members", &*key))
             .content(member.clone())
             .await?;
@@ -450,7 +480,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn get_team_members(&self, team_id: &str) -> Result<Vec<TeamMember>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM team_members WHERE team_id = $id")
             .bind(("id", team_id.to_string()))
             .await?;
@@ -468,7 +499,8 @@ impl SwarmStorage for SurrealBackend {
 
     // === Team Tasks ===
     async fn create_team_task(&self, task: &TeamTask) -> Result<()> {
-        let _: Option<TeamTask> = self.db
+        let _: Option<TeamTask> = self
+            .db
             .create(("team_tasks", &*task.task_id))
             .content(task.clone())
             .await?;
@@ -476,7 +508,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn get_team_task(&self, task_id: &str) -> Result<Option<TeamTask>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM team_tasks WHERE task_id = $id LIMIT 1")
             .bind(("id", task_id.to_string()))
             .await?;
@@ -563,7 +596,8 @@ impl SwarmStorage for SurrealBackend {
 
     // === Team Messages ===
     async fn send_team_message(&self, msg: &TeamMessage) -> Result<()> {
-        let _: Option<TeamMessage> = self.db
+        let _: Option<TeamMessage> = self
+            .db
             .create(("team_messages", &*msg.message_id))
             .content(msg.clone())
             .await?;
@@ -604,14 +638,19 @@ impl SwarmStorage for SurrealBackend {
             .bind(("channel", route.channel.clone()))
             .bind(("chat_id", route.chat_id.clone()))
             .await?;
-        let _: Option<HandoffRoute> = self.db
+        let _: Option<HandoffRoute> = self
+            .db
             .create(("handoff_routes", &*route.route_id))
             .content(route.clone())
             .await?;
         Ok(())
     }
 
-    async fn get_handoff_route(&self, channel: &str, chat_id: &str) -> Result<Option<HandoffRoute>> {
+    async fn get_handoff_route(
+        &self,
+        channel: &str,
+        chat_id: &str,
+    ) -> Result<Option<HandoffRoute>> {
         let mut result = self.db
             .query("SELECT * FROM handoff_routes WHERE channel = $channel AND chat_id = $chat_id LIMIT 1")
             .bind(("channel", channel.to_string()))
@@ -631,7 +670,8 @@ impl SwarmStorage for SurrealBackend {
     }
 
     async fn list_handoff_routes(&self) -> Result<Vec<HandoffRoute>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM handoff_routes ORDER BY created_at DESC")
             .await?;
         Ok(result.take(0)?)
@@ -659,20 +699,26 @@ impl RocksCache {
     }
 
     pub fn get(&self, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        let cf_handle = self.db.cf_handle(cf)
+        let cf_handle = self
+            .db
+            .cf_handle(cf)
             .ok_or_else(|| anyhow::anyhow!("Column family {} not found", cf))?;
         Ok(self.db.get_cf(cf_handle, key)?)
     }
 
     pub fn put(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let cf_handle = self.db.cf_handle(cf)
+        let cf_handle = self
+            .db
+            .cf_handle(cf)
             .ok_or_else(|| anyhow::anyhow!("Column family {} not found", cf))?;
         self.db.put_cf(cf_handle, key, value)?;
         Ok(())
     }
 
     pub fn delete(&self, cf: &str, key: &[u8]) -> Result<()> {
-        let cf_handle = self.db.cf_handle(cf)
+        let cf_handle = self
+            .db
+            .cf_handle(cf)
             .ok_or_else(|| anyhow::anyhow!("Column family {} not found", cf))?;
         self.db.delete_cf(cf_handle, key)?;
         Ok(())

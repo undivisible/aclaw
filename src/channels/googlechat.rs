@@ -27,7 +27,9 @@ impl GoogleChatChannel {
 
 #[async_trait]
 impl Channel for GoogleChatChannel {
-    fn name(&self) -> &str { "googlechat" }
+    fn name(&self) -> &str {
+        "googlechat"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (tx, rx) = mpsc::channel(32);
@@ -35,10 +37,11 @@ impl Channel for GoogleChatChannel {
         let _key = self.service_account_key.clone();
 
         tokio::spawn(async move {
-            use axum::{Router, routing::post, Json};
+            use axum::{routing::post, Json, Router};
 
-            let app = Router::new()
-                .route("/googlechat/webhook", post(move |Json(body): Json<Value>| {
+            let app = Router::new().route(
+                "/googlechat/webhook",
+                post(move |Json(body): Json<Value>| {
                     let tx = tx.clone();
                     async move {
                         if body["type"].as_str() == Some("MESSAGE") {
@@ -47,9 +50,17 @@ impl Channel for GoogleChatChannel {
                             if !text.is_empty() {
                                 let incoming = IncomingMessage {
                                     id: msg["name"].as_str().unwrap_or("").to_string(),
-                                    sender_id: body["user"]["name"].as_str().unwrap_or("").to_string(),
-                                    sender_name: body["user"]["displayName"].as_str().map(|s| s.to_string()),
-                                    chat_id: body["space"]["name"].as_str().unwrap_or("").to_string(),
+                                    sender_id: body["user"]["name"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    sender_name: body["user"]["displayName"]
+                                        .as_str()
+                                        .map(|s| s.to_string()),
+                                    chat_id: body["space"]["name"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
                                     text,
                                     is_group: body["space"]["type"].as_str() == Some("ROOM"),
                                     reply_to: None,
@@ -60,7 +71,8 @@ impl Channel for GoogleChatChannel {
                         }
                         "{}"
                     }
-                }));
+                }),
+            );
 
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await.unwrap();
             axum::serve(listener, app).await.unwrap();
@@ -81,7 +93,10 @@ impl Channel for GoogleChatChannel {
                 "https://chat.googleapis.com/v1/{}/messages",
                 &message.chat_id
             ))
-            .header("Authorization", format!("Bearer {}", &self.service_account_key))
+            .header(
+                "Authorization",
+                format!("Bearer {}", &self.service_account_key),
+            )
             .json(&body)
             .send()
             .await?;
@@ -89,5 +104,7 @@ impl Channel for GoogleChatChannel {
         Ok(())
     }
 
-    async fn stop(&mut self) -> anyhow::Result<()> { Ok(()) }
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }

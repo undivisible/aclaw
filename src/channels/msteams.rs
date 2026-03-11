@@ -22,17 +22,20 @@ impl TeamsChannel {
 
 #[async_trait]
 impl Channel for TeamsChannel {
-    fn name(&self) -> &str { "msteams" }
+    fn name(&self) -> &str {
+        "msteams"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (tx, rx) = mpsc::channel(32);
         let _app_id = self.app_id.clone();
 
         tokio::spawn(async move {
-            use axum::{Router, routing::post, Json};
+            use axum::{routing::post, Json, Router};
 
-            let app = Router::new()
-                .route("/api/messages", post(move |Json(body): Json<Value>| {
+            let app = Router::new().route(
+                "/api/messages",
+                post(move |Json(body): Json<Value>| {
                     let tx = tx.clone();
                     async move {
                         if body["type"].as_str() == Some("message") {
@@ -40,11 +43,20 @@ impl Channel for TeamsChannel {
                             if !text.is_empty() {
                                 let incoming = IncomingMessage {
                                     id: body["id"].as_str().unwrap_or("").to_string(),
-                                    sender_id: body["from"]["id"].as_str().unwrap_or("").to_string(),
-                                    sender_name: body["from"]["name"].as_str().map(|s| s.to_string()),
-                                    chat_id: body["conversation"]["id"].as_str().unwrap_or("").to_string(),
+                                    sender_id: body["from"]["id"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    sender_name: body["from"]["name"]
+                                        .as_str()
+                                        .map(|s| s.to_string()),
+                                    chat_id: body["conversation"]["id"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
                                     text,
-                                    is_group: body["conversation"]["conversationType"].as_str() == Some("groupChat"),
+                                    is_group: body["conversation"]["conversationType"].as_str()
+                                        == Some("groupChat"),
                                     reply_to: None,
                                     timestamp: chrono::Utc::now(),
                                 };
@@ -53,7 +65,8 @@ impl Channel for TeamsChannel {
                         }
                         axum::http::StatusCode::OK
                     }
-                }));
+                }),
+            );
 
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3978").await.unwrap();
             axum::serve(listener, app).await.unwrap();
@@ -98,5 +111,7 @@ impl Channel for TeamsChannel {
         Ok(())
     }
 
-    async fn stop(&mut self) -> anyhow::Result<()> { Ok(()) }
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }

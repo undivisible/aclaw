@@ -3,9 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// MCP client for communicating with MCP servers (like Codex)
@@ -52,9 +52,13 @@ impl McpClient {
             .stderr(std::process::Stdio::inherit())
             .spawn()?;
 
-        let stdin = child.stdin.take()
+        let stdin = child
+            .stdin
+            .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdin"))?;
-        let stdout = child.stdout.take()
+        let stdout = child
+            .stdout
+            .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
 
         Ok(Self {
@@ -100,28 +104,35 @@ impl McpClient {
             anyhow::bail!("MCP error {}: {}", error.code, error.message);
         }
 
-        response.result
+        response
+            .result
             .ok_or_else(|| anyhow::anyhow!("No result in MCP response"))
     }
 
     /// Initialize the MCP connection
     pub async fn initialize(&self, client_info: Value) -> anyhow::Result<Value> {
-        self.call("initialize", Some(serde_json::json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": client_info
-        }))).await
+        self.call(
+            "initialize",
+            Some(serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": client_info
+            })),
+        )
+        .await
     }
 
     /// List available tools from the MCP server
     pub async fn list_tools(&self) -> anyhow::Result<Vec<McpTool>> {
         let result = self.call("tools/list", None).await?;
-        
-        let tools = result.get("tools")
+
+        let tools = result
+            .get("tools")
             .and_then(|t| t.as_array())
             .ok_or_else(|| anyhow::anyhow!("Invalid tools/list response"))?;
 
-        tools.iter()
+        tools
+            .iter()
             .map(|t| serde_json::from_value(t.clone()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("Failed to parse tool: {}", e))
@@ -129,19 +140,23 @@ impl McpClient {
 
     /// Call a tool
     pub async fn call_tool(&self, name: &str, arguments: Value) -> anyhow::Result<Value> {
-        self.call("tools/call", Some(serde_json::json!({
-            "name": name,
-            "arguments": arguments
-        }))).await
+        self.call(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": name,
+                "arguments": arguments
+            })),
+        )
+        .await
     }
 
     /// Shutdown the MCP server
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         self.call("shutdown", None).await?;
-        
+
         let mut process = self.process.lock().await;
         process.kill().await?;
-        
+
         Ok(())
     }
 }
@@ -162,22 +177,28 @@ impl CodexClient {
     /// Spawn Codex in MCP server mode
     pub async fn spawn() -> anyhow::Result<Self> {
         let mcp = McpClient::spawn("codex", &["mcp-server"]).await?;
-        
+
         // Initialize
         mcp.initialize(serde_json::json!({
             "name": "unthinkclaw",
             "version": "0.1.0"
-        })).await?;
+        }))
+        .await?;
 
         Ok(Self { mcp })
     }
 
     /// Run a Codex coding session
     pub async fn run_session(&self, goal: &str, repo_path: &str) -> anyhow::Result<Value> {
-        self.mcp.call_tool("run", serde_json::json!({
-            "goal": goal,
-            "path": repo_path
-        })).await
+        self.mcp
+            .call_tool(
+                "run",
+                serde_json::json!({
+                    "goal": goal,
+                    "path": repo_path
+                }),
+            )
+            .await
     }
 
     /// Get available tools from Codex

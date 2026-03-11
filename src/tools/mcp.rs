@@ -21,7 +21,8 @@ impl McpTool {
             self.client = Some(client);
         }
 
-        self.client.as_ref()
+        self.client
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Failed to initialize Codex client"))
     }
 }
@@ -38,7 +39,9 @@ struct McpArgs {
 
 #[async_trait]
 impl Tool for McpTool {
-    fn name(&self) -> &str { "mcp" }
+    fn name(&self) -> &str {
+        "mcp"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -77,12 +80,13 @@ impl Tool for McpTool {
 
         match args.action.as_str() {
             "run" => {
-                let goal = args.goal
+                let goal = args
+                    .goal
                     .ok_or_else(|| anyhow::anyhow!("goal required for run action"))?;
                 let path = args.path.unwrap_or_else(|| ".".to_string());
 
                 let result = client.run_session(&goal, &path).await?;
-                
+
                 client.shutdown().await.ok(); // Best effort cleanup
 
                 Ok(ToolResult::success(serde_json::to_string_pretty(&result)?))
@@ -90,18 +94,28 @@ impl Tool for McpTool {
 
             "list_tools" => {
                 let tools = client.list_tools().await?;
-                
+
                 client.shutdown().await.ok();
 
-                let output = tools.iter()
-                    .map(|t| format!("- {}: {}", t.name, t.description.as_deref().unwrap_or("No description")))
+                let output = tools
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "- {}: {}",
+                            t.name,
+                            t.description.as_deref().unwrap_or("No description")
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
 
                 Ok(ToolResult::success(output))
             }
 
-            other => Ok(ToolResult::error(format!("Unknown action: {}. Use: run, list_tools", other))),
+            other => Ok(ToolResult::error(format!(
+                "Unknown action: {}. Use: run, list_tools",
+                other
+            ))),
         }
     }
 }

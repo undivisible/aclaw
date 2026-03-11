@@ -27,7 +27,9 @@ struct SessionStatusArgs {
 
 #[async_trait]
 impl Tool for SessionStatusTool {
-    fn name(&self) -> &str { "session_status" }
+    fn name(&self) -> &str {
+        "session_status"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -46,12 +48,15 @@ impl Tool for SessionStatusTool {
     }
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
-        let args: SessionStatusArgs = serde_json::from_str(arguments).unwrap_or(SessionStatusArgs { model: None });
+        let args: SessionStatusArgs =
+            serde_json::from_str(arguments).unwrap_or(SessionStatusArgs { model: None });
 
         if let Some(model) = &args.model {
             if model == "default" {
                 self.runner.set_model("claude-sonnet-4-5");
-                return Ok(ToolResult::success("Model reset to default: claude-sonnet-4-5"));
+                return Ok(ToolResult::success(
+                    "Model reset to default: claude-sonnet-4-5",
+                ));
             }
             self.runner.set_model(model.as_str());
             return Ok(ToolResult::success(format!("Model switched to: {}", model)));
@@ -79,12 +84,16 @@ impl Tool for SessionStatusTool {
 pub struct ListModelsTool;
 
 impl ListModelsTool {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[async_trait]
 impl Tool for ListModelsTool {
-    fn name(&self) -> &str { "list_models" }
+    fn name(&self) -> &str {
+        "list_models"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -123,7 +132,11 @@ impl Tool for ListModelsTool {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Ok(ToolResult::error(format!("API error {}: {}", status, &text[..text.len().min(300)])));
+            return Ok(ToolResult::error(format!(
+                "API error {}: {}",
+                status,
+                &text[..text.len().min(300)]
+            )));
         }
 
         let data: serde_json::Value = resp.json().await?;
@@ -147,7 +160,7 @@ impl Tool for ListModelsTool {
                     • claude-sonnet-4-5 (fast, smart — default)\n\
                     • claude-opus-4 (most capable)\n\
                     • claude-haiku-3-5 (fastest, cheapest)\n\n\
-                    Use session_status with model parameter to switch."
+                    Use session_status with model parameter to switch.",
                 ))
             }
         }

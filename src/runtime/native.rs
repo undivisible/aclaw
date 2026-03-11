@@ -16,10 +16,18 @@ impl NativeRuntime {
 }
 
 impl RuntimeAdapter for NativeRuntime {
-    fn name(&self) -> &str { "native" }
-    fn has_shell(&self) -> bool { true }
-    fn has_filesystem(&self) -> bool { true }
-    fn storage_path(&self) -> PathBuf { self.storage.clone() }
+    fn name(&self) -> &str {
+        "native"
+    }
+    fn has_shell(&self) -> bool {
+        true
+    }
+    fn has_filesystem(&self) -> bool {
+        true
+    }
+    fn storage_path(&self) -> PathBuf {
+        self.storage.clone()
+    }
 
     fn build_command(&self, command: &str, workspace: &Path) -> anyhow::Result<Command> {
         let mut cmd = Command::new("bash");

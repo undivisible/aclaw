@@ -32,7 +32,9 @@ struct EditArgs {
 
 #[async_trait]
 impl Tool for EditTool {
-    fn name(&self) -> &str { "Edit" }
+    fn name(&self) -> &str {
+        "Edit"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -71,7 +73,9 @@ impl Tool for EditTool {
 
         // Security: check path is within workspace for relative paths
         if !args.path.starts_with('/') {
-            if let (Ok(canonical_ws), Ok(canonical_file)) = (self.workspace.canonicalize(), full_path.canonicalize()) {
+            if let (Ok(canonical_ws), Ok(canonical_file)) =
+                (self.workspace.canonicalize(), full_path.canonicalize())
+            {
                 if !canonical_file.starts_with(&canonical_ws) {
                     return Ok(ToolResult::error("Path traversal not allowed"));
                 }
@@ -81,7 +85,12 @@ impl Tool for EditTool {
         // Read file
         let content = match tokio::fs::read_to_string(&full_path).await {
             Ok(c) => c,
-            Err(e) => return Ok(ToolResult::error(format!("Cannot read file '{}': {}", args.path, e))),
+            Err(e) => {
+                return Ok(ToolResult::error(format!(
+                    "Cannot read file '{}': {}",
+                    args.path, e
+                )))
+            }
         };
 
         // Find and replace
@@ -96,7 +105,10 @@ impl Tool for EditTool {
 
         // Write back
         match tokio::fs::write(&full_path, &new_content).await {
-            Ok(_) => Ok(ToolResult::success(format!("Successfully replaced text in {}", args.path))),
+            Ok(_) => Ok(ToolResult::success(format!(
+                "Successfully replaced text in {}",
+                args.path
+            ))),
             Err(e) => Ok(ToolResult::error(format!("Failed to write: {}", e))),
         }
     }

@@ -43,16 +43,16 @@ impl AgentsConfig {
         let workspace_path = Path::new(workspace);
 
         // Read SOUL.md
-        let soul_content = std::fs::read_to_string(workspace_path.join("SOUL.md"))
-            .unwrap_or_default();
+        let soul_content =
+            std::fs::read_to_string(workspace_path.join("SOUL.md")).unwrap_or_default();
         let soul = Soul {
             name: extract_field(&soul_content, "Name"),
             vibe: extract_field(&soul_content, "Vibe"),
         };
 
         // Read USER.md
-        let user_content = std::fs::read_to_string(workspace_path.join("USER.md"))
-            .unwrap_or_default();
+        let user_content =
+            std::fs::read_to_string(workspace_path.join("USER.md")).unwrap_or_default();
         let user = User {
             name: extract_field(&user_content, "Name"),
             location: extract_field(&user_content, "Location"),

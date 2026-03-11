@@ -18,16 +18,32 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into(), tool_use_id: None }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+            tool_use_id: None,
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into(), tool_use_id: None }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+            tool_use_id: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: content.into(), tool_use_id: None }
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+            tool_use_id: None,
+        }
     }
     pub fn tool_result(id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: "tool_result".into(), content: content.into(), tool_use_id: Some(id.into()) }
+        Self {
+            role: "tool_result".into(),
+            content: content.into(),
+            tool_use_id: Some(id.into()),
+        }
     }
     pub fn is_tool_result(&self) -> bool {
         self.role == "tool_result"
@@ -66,11 +82,11 @@ impl ChatResponse {
 }
 
 /// Chat request payload.
-#[derive(Debug, Clone)]
-pub struct ChatRequest {
-    pub messages: Vec<ChatMessage>,
-    pub tools: Option<Vec<ToolSpec>>,
-    pub model: String,
+#[derive(Debug, Clone, Copy)]
+pub struct ChatRequest<'a> {
+    pub messages: &'a [ChatMessage],
+    pub tools: Option<&'a [ToolSpec]>,
+    pub model: &'a str,
     pub temperature: f64,
     pub max_tokens: Option<u32>,
 }
@@ -101,14 +117,15 @@ pub trait Provider: Send + Sync {
     }
 
     /// Send a chat request and get a response.
-    async fn chat(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse>;
+    async fn chat(&self, request: &ChatRequest<'_>) -> anyhow::Result<ChatResponse>;
 
     /// Simple one-shot message (convenience wrapper)
     async fn simple_chat(&self, message: &str, model: &str) -> anyhow::Result<String> {
+        let messages = [ChatMessage::user(message)];
         let request = ChatRequest {
-            messages: vec![ChatMessage::user(message)],
+            messages: &messages,
             tools: None,
-            model: model.to_string(),
+            model,
             temperature: 0.7,
             max_tokens: None,
         };

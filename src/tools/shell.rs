@@ -3,18 +3,25 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::traits::*;
+use crate::policy::ExecutionPolicy;
 
 pub struct ShellTool {
     workspace: PathBuf,
     timeout_secs: u64,
+    policy: Arc<ExecutionPolicy>,
 }
 
 impl ShellTool {
-    pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace, timeout_secs: 120 }
+    pub fn new(workspace: PathBuf, policy: Arc<ExecutionPolicy>) -> Self {
+        Self {
+            workspace,
+            timeout_secs: 120,
+            policy,
+        }
     }
 
     pub fn with_timeout(mut self, secs: u64) -> Self {
@@ -35,7 +42,9 @@ struct ShellArgs {
 
 #[async_trait]
 impl Tool for ShellTool {
-    fn name(&self) -> &str { "exec" }
+    fn name(&self) -> &str {
+        "exec"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -63,6 +72,10 @@ impl Tool for ShellTool {
     }
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
+        if !self.policy.allow_shell {
+            return ExecutionPolicy::deny("Shell execution is disabled by policy");
+        }
+
         let args: ShellArgs = serde_json::from_str(arguments)?;
 
         // Guard: prevent self-restart/self-kill mid-conversation
@@ -99,11 +112,14 @@ impl Tool for ShellTool {
         let output = match tokio::time::timeout(
             Duration::from_secs(timeout),
             child.wait_with_output(),
-        ).await {
+        )
+        .await
+        {
             Ok(result) => result?,
             Err(_) => {
                 return Ok(ToolResult::error(format!(
-                    "Command timed out after {}s", timeout
+                    "Command timed out after {}s",
+                    timeout
                 )));
             }
         };
@@ -121,7 +137,11 @@ impl Tool for ShellTool {
 
         // Truncate if too long
         let truncated = if result.len() > 20_000 {
-            format!("{}...\n[truncated {} chars]", &result[..20_000], result.len() - 20_000)
+            format!(
+                "{}...\n[truncated {} chars]",
+                &result[..20_000],
+                result.len() - 20_000
+            )
         } else {
             result
         };

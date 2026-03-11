@@ -328,10 +328,11 @@ impl AgentRunner {
                 &msg.text
             );
 
+            let plan_messages = [ChatMessage::user(&plan_prompt)];
             let plan_request = ChatRequest {
-                messages: vec![ChatMessage::user(&plan_prompt)],
+                messages: &plan_messages,
                 tools: None,
-                model: FAST_MODEL.to_string(),
+                model: FAST_MODEL,
                 temperature: 0.8,
                 max_tokens: Some(500),
             };
@@ -420,13 +421,13 @@ impl AgentRunner {
                 messages.iter().map(|m| m.content.len()).sum::<usize>(), model);
 
             let request = ChatRequest {
-                messages: messages.clone(),
+                messages: &messages,
                 tools: if tool_specs.is_empty() || state == AgentState::Summarizing {
                     None // No tools during summarization
                 } else {
-                    Some(tool_specs.clone())
+                    Some(&tool_specs)
                 },
-                model: model.clone(),
+                model: &model,
                 temperature,
                 max_tokens: Some(8192),
             };
@@ -595,8 +596,12 @@ impl AgentRunner {
 
     /// Persist user + assistant messages to conversation history
     async fn persist_conversation(&self, msg: &IncomingMessage, response: &str) -> anyhow::Result<()> {
-        self.memory.store_conversation(&msg.chat_id, &msg.sender_id, "user", &msg.text).await?;
-        self.memory.store_conversation(&msg.chat_id, "assistant", "assistant", response).await?;
+        self.memory
+            .store_conversation_batch(&[
+                (&msg.chat_id, &msg.sender_id, "user", &msg.text),
+                (&msg.chat_id, "assistant", "assistant", response),
+            ])
+            .await?;
         Ok(())
     }
 
@@ -654,12 +659,11 @@ impl AgentRunner {
             summary_input
         );
         
+        let compact_messages = [ChatMessage::user(&compaction_prompt)];
         let compact_request = ChatRequest {
-            messages: vec![
-                ChatMessage::user(&compaction_prompt),
-            ],
+            messages: &compact_messages,
             tools: None,
-            model: FAST_MODEL.to_string(),
+            model: FAST_MODEL,
             temperature: 0.3,
             max_tokens: Some(1000),
         };

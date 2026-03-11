@@ -11,8 +11,11 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::traits::*;
+use crate::config::PolicyConfig;
+use crate::policy::ExecutionPolicy;
 
 /// Directory where dynamic tools live
 fn tools_dir() -> PathBuf {
@@ -27,6 +30,7 @@ pub struct DynamicTool {
     pub parameters: serde_json::Value,
     pub tool_dir: PathBuf,
     pub language: String, // "v", "python", "shell"
+    policy: Arc<ExecutionPolicy>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -39,7 +43,7 @@ struct DynamicToolSpec {
 
 impl DynamicTool {
     /// Load a dynamic tool from its directory
-    pub fn load(dir: &PathBuf) -> Option<Self> {
+    pub fn load(dir: &PathBuf, policy: Arc<ExecutionPolicy>) -> Option<Self> {
         let spec_path = dir.join("spec.json");
         let spec_str = std::fs::read_to_string(&spec_path).ok()?;
         let spec: DynamicToolSpec = serde_json::from_str(&spec_str).ok()?;
@@ -61,11 +65,12 @@ impl DynamicTool {
             parameters: spec.parameters,
             tool_dir: dir.clone(),
             language,
+            policy,
         })
     }
 
     /// Load all dynamic tools from the tools directory
-    pub fn load_all() -> Vec<Self> {
+    pub fn load_all(policy: Arc<ExecutionPolicy>) -> Vec<Self> {
         let dir = tools_dir();
         if !dir.exists() {
             return Vec::new();
@@ -75,7 +80,7 @@ impl DynamicTool {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
-                    if let Some(tool) = Self::load(&entry.path()) {
+                    if let Some(tool) = Self::load(&entry.path(), Arc::clone(&policy)) {
                         tools.push(tool);
                     }
                 }
@@ -100,6 +105,10 @@ impl Tool for DynamicTool {
     }
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
+        if !self.policy.allow_dynamic_tools {
+            return ExecutionPolicy::deny("Dynamic tool execution is disabled by policy");
+        }
+
         let run_file = match self.language.as_str() {
             "v" => "run.v",
             "python" => "run.py",
@@ -167,7 +176,11 @@ impl Tool for DynamicTool {
         Ok(if output.status.success() {
             ToolResult::success(truncated)
         } else {
-            ToolResult::error(format!("Exit {}: {}", output.status.code().unwrap_or(-1), truncated))
+            ToolResult::error(format!(
+                "Exit {}: {}",
+                output.status.code().unwrap_or(-1),
+                truncated
+            ))
         })
     }
 }
@@ -176,10 +189,14 @@ impl Tool for DynamicTool {
 // create_tool — meta-tool for the AI to create new tools
 // ============================================================
 
-pub struct CreateToolTool;
+pub struct CreateToolTool {
+    policy: Arc<ExecutionPolicy>,
+}
 
 impl CreateToolTool {
-    pub fn new() -> Self { Self }
+    pub fn new(policy: Arc<ExecutionPolicy>) -> Self {
+        Self { policy }
+    }
 }
 
 #[derive(Deserialize)]
@@ -198,7 +215,9 @@ struct CreateToolArgs {
 
 #[async_trait]
 impl Tool for CreateToolTool {
-    fn name(&self) -> &str { "create_tool" }
+    fn name(&self) -> &str {
+        "create_tool"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -235,11 +254,17 @@ impl Tool for CreateToolTool {
     }
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
+        if !self.policy.allow_dynamic_tools {
+            return ExecutionPolicy::deny("Dynamic tool creation is disabled by policy");
+        }
+
         let args: CreateToolArgs = serde_json::from_str(arguments)?;
 
         // Validate name
         if !args.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            return Ok(ToolResult::error("Tool name must be alphanumeric + underscores only"));
+            return Ok(ToolResult::error(
+                "Tool name must be alphanumeric + underscores only",
+            ));
         }
 
         let language = args.language.unwrap_or_else(|| "v".to_string());
@@ -265,7 +290,11 @@ impl Tool for CreateToolTool {
             "v" => "run.v",
             "python" => "run.py",
             "shell" => "run.sh",
-            _ => return Ok(ToolResult::error("Unsupported language. Use: v, python, shell")),
+            _ => {
+                return Ok(ToolResult::error(
+                    "Unsupported language. Use: v, python, shell",
+                ))
+            }
         };
 
         std::fs::write(tool_dir.join(filename), &args.code)?;
@@ -281,7 +310,7 @@ impl Tool for CreateToolTool {
         }
 
         // Verify the tool can be loaded
-        match DynamicTool::load(&tool_dir) {
+        match DynamicTool::load(&tool_dir, Arc::clone(&self.policy)) {
             Some(t) => Ok(ToolResult::success(format!(
                 "✅ Tool '{}' created successfully!\n\
                 Language: {}\n\
@@ -307,12 +336,16 @@ impl Tool for CreateToolTool {
 pub struct ListCustomToolsTool;
 
 impl ListCustomToolsTool {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[async_trait]
 impl Tool for ListCustomToolsTool {
-    fn name(&self) -> &str { "list_custom_tools" }
+    fn name(&self) -> &str {
+        "list_custom_tools"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -326,12 +359,14 @@ impl Tool for ListCustomToolsTool {
     }
 
     async fn execute(&self, _arguments: &str) -> anyhow::Result<ToolResult> {
-        let tools = DynamicTool::load_all();
+        let tools = DynamicTool::load_all(Arc::new(ExecutionPolicy::from_config(
+            &PolicyConfig::default(),
+        )));
         if tools.is_empty() {
             return Ok(ToolResult::success(
                 "No custom tools created yet.\n\
                 Use create_tool to make one!\n\n\
-                Example: create a V tool that fetches weather, a Python data processor, etc."
+                Example: create a V tool that fetches weather, a Python data processor, etc.",
             ));
         }
 
@@ -339,7 +374,10 @@ impl Tool for ListCustomToolsTool {
         for t in &tools {
             output.push_str(&format!(
                 "• {} ({}) — {}\n  Location: {}\n",
-                t.name, t.language, t.description, t.tool_dir.display()
+                t.name,
+                t.language,
+                t.description,
+                t.tool_dir.display()
             ));
         }
         Ok(ToolResult::success(output))

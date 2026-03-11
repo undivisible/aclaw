@@ -16,11 +16,13 @@ use unthinkclaw::channels::Channel as _;
 use unthinkclaw::channels::discord::DiscordChannel;
 use unthinkclaw::config::Config;
 use unthinkclaw::cron_scheduler::CronScheduler;
+use unthinkclaw::diagnostics::{collect_doctor_report, render_doctor_report, render_findings};
 use unthinkclaw::gateway;
 use unthinkclaw::heartbeat::{self, HeartbeatConfig};
 use unthinkclaw::memory::search::{MemorySearchTool, MemoryGetTool};
 use unthinkclaw::memory::sqlite::SqliteMemory;
 use unthinkclaw::memory::MemoryBackend;
+use unthinkclaw::policy::ExecutionPolicy;
 use unthinkclaw::prompt;
 use unthinkclaw::skills;
 #[cfg(feature = "provider-anthropic")]
@@ -100,6 +102,32 @@ enum Commands {
         /// Configuration file path
         #[arg(short, long, default_value = "unthinkclaw.json")]
         config: String,
+    },
+
+    /// Run system diagnostics and config validation
+    Doctor {
+        /// Configuration file path
+        #[arg(short, long, default_value = "unthinkclaw.json")]
+        config: String,
+
+        /// Show more dependency checks
+        #[arg(short, long, default_value_t = false)]
+        verbose: bool,
+
+        /// Output JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+
+    /// Run a focused security/config audit
+    Audit {
+        /// Configuration file path
+        #[arg(short, long, default_value = "unthinkclaw.json")]
+        config: String,
+
+        /// Output JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
 
     /// Show runtime status
@@ -326,12 +354,11 @@ async fn main() -> anyhow::Result<()> {
             let workspace = workspace.unwrap_or(cfg.workspace.clone());
 
             let provider = build_provider(&cfg);
-            let memory = Arc::new(SqliteMemory::new(
-                &workspace.join(".unthinkclaw/memory.db").to_string_lossy(),
-            )?);
+            let policy = Arc::new(ExecutionPolicy::from_config(&cfg.policy));
+            let memory = build_memory_backend(&workspace).await?;
 
             // Build system prompt from workspace context files
-            let system_prompt = prompt::build_system_prompt(&workspace);
+            let system_prompt = prompt::build_system_prompt(&workspace).await;
 
             // Discover skills
             let discovered_skills = skills::discover_skills();
@@ -341,7 +368,7 @@ async fn main() -> anyhow::Result<()> {
 
             // Register tools (including memory search/get)
             let mut tools: Vec<Arc<dyn Tool>> = vec![
-                Arc::new(ShellTool::new(workspace.clone())),           // exec
+                Arc::new(ShellTool::new(workspace.clone(), Arc::clone(&policy))),           // exec
                 Arc::new(FileReadTool::new(workspace.clone())),        // Read
                 Arc::new(FileWriteTool::new(workspace.clone())),       // Write
                 Arc::new(unthinkclaw::tools::edit::EditTool::new(workspace.clone())), // Edit
@@ -349,15 +376,16 @@ async fn main() -> anyhow::Result<()> {
                 Arc::new(MemoryGetTool::new(workspace.clone())),       // memory_get
                 Arc::new(unthinkclaw::tools::web_search::WebSearchTool::new()),  // web_search
                 Arc::new(unthinkclaw::tools::web_fetch::WebFetchTool::new()),    // web_fetch
+                Arc::new(unthinkclaw::tools::doctor::DoctorTool::new()),         // doctor
                 Arc::new(unthinkclaw::tools::session::ListModelsTool::new()),    // list_models
-                Arc::new(unthinkclaw::tools::dynamic::CreateToolTool::new()),    // create_tool
+                Arc::new(unthinkclaw::tools::dynamic::CreateToolTool::new(Arc::clone(&policy))),    // create_tool
                 Arc::new(unthinkclaw::tools::dynamic::ListCustomToolsTool::new()), // list_custom_tools
                 Arc::new(unthinkclaw::tools::browser::BrowserTool::new()),       // browser (agent-browser)
                 Arc::new(unthinkclaw::tools::mcp::McpTool::new()),               // mcp (Codex MCP client)
             ];
 
             // Load any previously created dynamic tools
-            let dynamic_tools = unthinkclaw::tools::dynamic::DynamicTool::load_all();
+            let dynamic_tools = unthinkclaw::tools::dynamic::DynamicTool::load_all(Arc::clone(&policy));
             let dynamic_count = dynamic_tools.len();
             for dt in dynamic_tools {
                 tools.push(Arc::new(dt));
@@ -667,17 +695,50 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Gateway { addr, config } => {
-            let _cfg = load_config(&config);
+            let cfg = load_config(&config);
+            let addr = if addr == "0.0.0.0:8080" {
+                cfg.gateway.bind.clone()
+            } else {
+                addr
+            };
+            let auth_token = cfg
+                .gateway
+                .auth_token
+                .clone()
+                .or_else(|| std::env::var("UNTHINKCLAW_GATEWAY_TOKEN").ok())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             println!("unthinkclaw Gateway — starting on {}", addr);
             println!("   API: http://{}/api/chat", addr);
             println!("   WebSocket: ws://{}/ws", addr);
-            gateway::start_gateway(&addr).await?;
+            println!("   Bearer token: {}", auth_token);
+            println!("   Admin API enabled: {}", cfg.gateway.enable_admin_api);
+            gateway::start_gateway(&addr, cfg.gateway.clone(), &auth_token).await?;
+        }
+
+        Commands::Doctor { config, verbose, json } => {
+            let cfg = load_config(&config);
+            let report = collect_doctor_report(Some(&cfg), verbose).await;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", render_doctor_report(&report));
+            }
+        }
+
+        Commands::Audit { config, json } => {
+            let cfg = load_config(&config);
+            let findings = unthinkclaw::diagnostics::audit_config(&cfg);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&findings)?);
+            } else {
+                println!("{}", render_findings(&findings));
+            }
         }
 
         Commands::Status => {
             println!("unthinkclaw v{}", env!("CARGO_PKG_VERSION"));
             println!("Status: OK");
-            println!("Commands: chat, ask, gateway, status, init, cron");
+            println!("Commands: chat, ask, gateway, doctor, audit, status, init, cron");
         }
 
         Commands::Init { provider, api_key } => {
@@ -1086,4 +1147,20 @@ fn build_provider(cfg: &Config) -> Arc<dyn Provider> {
             Arc::new(OpenAiCompatProvider::new(&api_key, base, other))
         }
     }
+}
+
+async fn build_memory_backend(workspace: &PathBuf) -> anyhow::Result<Arc<dyn MemoryBackend>> {
+    #[cfg(feature = "swarm")]
+    {
+        let surreal_path = workspace.join(".unthinkclaw/memory.surreal");
+        if let Ok(memory) =
+            unthinkclaw::memory::surreal::SurrealMemory::new(surreal_path.as_path()).await
+        {
+            return Ok(Arc::new(memory));
+        }
+    }
+
+    Ok(Arc::new(SqliteMemory::new(
+        &workspace.join(".unthinkclaw/memory.db").to_string_lossy(),
+    )?))
 }

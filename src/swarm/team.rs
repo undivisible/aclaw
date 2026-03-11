@@ -40,7 +40,11 @@ impl TeamManager {
         self.storage.create_team(&team).await?;
 
         // Add lead as team member with "lead" role
-        let member = TeamMember::new(team.team_id.clone(), lead_agent_id.to_string(), "lead".to_string());
+        let member = TeamMember::new(
+            team.team_id.clone(),
+            lead_agent_id.to_string(),
+            "lead".to_string(),
+        );
         self.storage.add_team_member(&member).await?;
 
         Ok(team)
@@ -117,12 +121,19 @@ impl TeamManager {
     /// Atomically claim a task (returns false if already claimed)
     pub async fn claim_task(&self, task_id: &str, agent_id: &str) -> Result<bool> {
         // Verify agent is a member of the task's team
-        let task = self.storage.get_team_task(task_id).await?
+        let task = self
+            .storage
+            .get_team_task(task_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Task '{}' not found", task_id))?;
 
         let members = self.storage.get_team_members(&task.team_id).await?;
         if !members.iter().any(|m| m.agent_id == agent_id) {
-            bail!("Agent '{}' is not a member of team '{}'", agent_id, task.team_id);
+            bail!(
+                "Agent '{}' is not a member of team '{}'",
+                agent_id,
+                task.team_id
+            );
         }
 
         // Check if task is blocked
@@ -150,7 +161,10 @@ impl TeamManager {
         self.storage.complete_team_task(task_id, result).await?;
 
         // Check if completing this task unblocks others
-        let task = self.storage.get_team_task(task_id).await?
+        let task = self
+            .storage
+            .get_team_task(task_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Task '{}' not found after completion", task_id))?;
 
         let blocked = self.storage.get_blocked_tasks(&task.team_id).await?;
@@ -198,10 +212,17 @@ impl TeamManager {
     pub async fn search_tasks(&self, team_id: &str, query: &str) -> Result<Vec<TeamTask>> {
         let all = self.storage.list_team_tasks(team_id, None).await?;
         let q = query.to_lowercase();
-        Ok(all.into_iter().filter(|t| {
-            t.subject.to_lowercase().contains(&q) ||
-            t.description.as_deref().unwrap_or("").to_lowercase().contains(&q)
-        }).collect())
+        Ok(all
+            .into_iter()
+            .filter(|t| {
+                t.subject.to_lowercase().contains(&q)
+                    || t.description
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&q)
+            })
+            .collect())
     }
 
     // === Mailbox ===
@@ -215,8 +236,12 @@ impl TeamManager {
         to_agent_id: Option<&str>,
         message_type: &str,
     ) -> Result<TeamMessage> {
-        let mut msg = TeamMessage::new(team_id.to_string(), from_agent_id.to_string(), content.to_string())
-            .with_type(message_type.to_string());
+        let mut msg = TeamMessage::new(
+            team_id.to_string(),
+            from_agent_id.to_string(),
+            content.to_string(),
+        )
+        .with_type(message_type.to_string());
         if let Some(to) = to_agent_id {
             msg = msg.directed(to.to_string());
         }

@@ -28,22 +28,39 @@ impl DockerRuntime {
 }
 
 impl RuntimeAdapter for DockerRuntime {
-    fn name(&self) -> &str { "docker" }
-    fn has_shell(&self) -> bool { true }
-    fn has_filesystem(&self) -> bool { true }
-    fn storage_path(&self) -> PathBuf { self.storage.clone() }
-    fn memory_budget(&self) -> u64 { self.memory_limit }
+    fn name(&self) -> &str {
+        "docker"
+    }
+    fn has_shell(&self) -> bool {
+        true
+    }
+    fn has_filesystem(&self) -> bool {
+        true
+    }
+    fn storage_path(&self) -> PathBuf {
+        self.storage.clone()
+    }
+    fn memory_budget(&self) -> u64 {
+        self.memory_limit
+    }
 
     fn build_command(&self, command: &str, workspace: &Path) -> anyhow::Result<Command> {
         let mut cmd = Command::new("docker");
         cmd.args([
-            "run", "--rm",
-            "--memory", &format!("{}m", self.memory_limit / (1024 * 1024)),
-            "--cpus", "2",
-            "-v", &format!("{}:/workspace", workspace.display()),
-            "-w", "/workspace",
+            "run",
+            "--rm",
+            "--memory",
+            &format!("{}m", self.memory_limit / (1024 * 1024)),
+            "--cpus",
+            "2",
+            "-v",
+            &format!("{}:/workspace", workspace.display()),
+            "-w",
+            "/workspace",
             &self.image,
-            "bash", "-c", command,
+            "bash",
+            "-c",
+            command,
         ]);
         Ok(cmd)
     }

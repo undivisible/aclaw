@@ -19,7 +19,9 @@ impl ClaudeUsageTool {
 
 #[async_trait]
 impl Tool for ClaudeUsageTool {
-    fn name(&self) -> &str { "claude_usage" }
+    fn name(&self) -> &str {
+        "claude_usage"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -55,16 +57,28 @@ impl Tool for ClaudeUsageTool {
                     output.push(format!("Requests: {}/{} ({}% left)", rem, lim, pct));
                 }
 
-                if let (Some(rem), Some(lim)) = (limits.input_tokens_remaining, limits.input_tokens_limit) {
+                if let (Some(rem), Some(lim)) =
+                    (limits.input_tokens_remaining, limits.input_tokens_limit)
+                {
                     let pct = (rem as f64 / lim as f64 * 100.0) as usize;
-                    output.push(format!("Input tokens: {}/{} ({}% left)",
-                        format_tokens(rem), format_tokens(lim), pct));
+                    output.push(format!(
+                        "Input tokens: {}/{} ({}% left)",
+                        format_tokens(rem),
+                        format_tokens(lim),
+                        pct
+                    ));
                 }
 
-                if let (Some(rem), Some(lim)) = (limits.output_tokens_remaining, limits.output_tokens_limit) {
+                if let (Some(rem), Some(lim)) =
+                    (limits.output_tokens_remaining, limits.output_tokens_limit)
+                {
                     let pct = (rem as f64 / lim as f64 * 100.0) as usize;
-                    output.push(format!("Output tokens: {}/{} ({}% left)",
-                        format_tokens(rem), format_tokens(lim), pct));
+                    output.push(format!(
+                        "Output tokens: {}/{} ({}% left)",
+                        format_tokens(rem),
+                        format_tokens(lim),
+                        pct
+                    ));
                 }
 
                 if let Some(reset) = limits.tokens_reset {
@@ -73,7 +87,9 @@ impl Tool for ClaudeUsageTool {
 
                 output.push(String::new());
             } else {
-                output.push("⚠️ No rate limit data yet (need at least one API call first)".to_string());
+                output.push(
+                    "⚠️ No rate limit data yet (need at least one API call first)".to_string(),
+                );
                 output.push(String::new());
             }
         }
@@ -84,7 +100,10 @@ impl Tool for ClaudeUsageTool {
 
             output.push("💰 Cost Summary\n".to_string());
             output.push(format!("Total spent: ${:.4}", summary.total_cost));
-            output.push(format!("Total tokens: {}", format_tokens(summary.total_tokens)));
+            output.push(format!(
+                "Total tokens: {}",
+                format_tokens(summary.total_tokens)
+            ));
             output.push(format!("API calls: {}", summary.call_count));
 
             if !summary.by_model.is_empty() {

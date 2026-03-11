@@ -21,12 +21,14 @@ pub mod claw_adapter;
 pub mod config;
 pub mod cost;
 pub mod cron_scheduler;
+pub mod diagnostics;
 pub mod embeddings;
 pub mod gateway;
 pub mod heartbeat;
 pub mod mcp;
 pub mod memory;
 pub mod plugin;
+pub mod policy;
 pub mod prompt;
 pub mod providers;
 pub mod runtime;
@@ -42,5 +44,4 @@ pub use scheduler::Scheduler;
 #[cfg(feature = "swarm")]
 pub use swarm::SwarmCoordinator;
 #[cfg(feature = "swarm")]
-pub use swarm::{DelegationManager, TeamManager, HandoffManager, ConcurrencyScheduler};
-
+pub use swarm::{ConcurrencyScheduler, DelegationManager, HandoffManager, TeamManager};

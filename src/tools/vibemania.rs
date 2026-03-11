@@ -26,7 +26,9 @@ struct VibemaiaArgs {
 
 #[async_trait]
 impl Tool for VibemaniaTool {
-    fn name(&self) -> &str { "vibemania" }
+    fn name(&self) -> &str {
+        "vibemania"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -54,15 +56,17 @@ impl Tool for VibemaniaTool {
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
         let args: VibemaiaArgs = serde_json::from_str(arguments)?;
-        
+
         // Check if vibemania is available
-        let vibemania_bin = self.workspace.parent()
+        let vibemania_bin = self
+            .workspace
+            .parent()
             .and_then(|p| Some(p.join("vibemania/target/release/vibemania")))
             .filter(|p| p.exists());
 
         if vibemania_bin.is_none() {
             return Ok(ToolResult::error(
-                "Vibemania not found. Clone/build from atechnology-company/vibemania first."
+                "Vibemania not found. Clone/build from atechnology-company/vibemania first.",
             ));
         }
 

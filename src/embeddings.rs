@@ -23,7 +23,7 @@ impl EmbeddingsClient {
     /// Embed text using Gemini text-embedding-004
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let url = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent";
-        
+
         let request = serde_json::json!({
             "model": "models/text-embedding-004",
             "content": {
@@ -42,7 +42,7 @@ impl EmbeddingsClient {
             .await?;
 
         let result: serde_json::Value = resp.json().await?;
-        
+
         if let Some(embedding) = result
             .get("embedding")
             .and_then(|e| e.get("values"))

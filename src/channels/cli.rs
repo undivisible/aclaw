@@ -1,20 +1,24 @@
 //! CLI channel — interactive terminal chat.
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::mpsc;
 
 use super::traits::*;
 
 pub struct CliChannel;
 
 impl CliChannel {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[async_trait]
 impl Channel for CliChannel {
-    fn name(&self) -> &str { "cli" }
+    fn name(&self) -> &str {
+        "cli"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (tx, rx) = mpsc::channel(32);
@@ -26,8 +30,12 @@ impl Channel for CliChannel {
 
             while let Ok(Some(line_input)) = lines.next_line().await {
                 let line = line_input.trim().to_string();
-                if line.is_empty() { continue; }
-                if line == "/quit" || line == "/exit" { break; }
+                if line.is_empty() {
+                    continue;
+                }
+                if line == "/quit" || line == "/exit" {
+                    break;
+                }
 
                 let msg = IncomingMessage {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -40,7 +48,9 @@ impl Channel for CliChannel {
                     timestamp: chrono::Utc::now(),
                 };
 
-                if tx.send(msg).await.is_err() { break; }
+                if tx.send(msg).await.is_err() {
+                    break;
+                }
             }
         });
 

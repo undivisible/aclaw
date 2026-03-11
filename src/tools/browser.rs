@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use std::process::Stdio;
+use tokio::process::Command;
 
 use super::traits::*;
 
@@ -114,12 +114,15 @@ impl BrowserTool {
 
     fn to_result(&self, resp: AgentBrowserResponse) -> anyhow::Result<ToolResult> {
         if resp.success {
-            let output = resp.data
+            let output = resp
+                .data
                 .and_then(|d| serde_json::to_string_pretty(&d).ok())
                 .unwrap_or_else(|| "Success".to_string());
             Ok(ToolResult::success(output))
         } else {
-            Ok(ToolResult::error(resp.error.unwrap_or_else(|| "Unknown error".to_string())))
+            Ok(ToolResult::error(
+                resp.error.unwrap_or_else(|| "Unknown error".to_string()),
+            ))
         }
     }
 }
@@ -134,7 +137,9 @@ struct AgentBrowserResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum BrowserAction {
-    Open { url: String },
+    Open {
+        url: String,
+    },
     Snapshot {
         #[serde(default)]
         interactive_only: bool,
@@ -143,10 +148,20 @@ enum BrowserAction {
         #[serde(default)]
         depth: Option<u32>,
     },
-    Click { selector: String },
-    Fill { selector: String, value: String },
-    Type { selector: String, text: String },
-    GetText { selector: String },
+    Click {
+        selector: String,
+    },
+    Fill {
+        selector: String,
+        value: String,
+    },
+    Type {
+        selector: String,
+        text: String,
+    },
+    GetText {
+        selector: String,
+    },
     GetTitle,
     GetUrl,
     Screenshot {
@@ -161,16 +176,28 @@ enum BrowserAction {
         #[serde(default)]
         ms: Option<u64>,
     },
-    Press { key: String },
-    Hover { selector: String },
-    Scroll { direction: String, #[serde(default)] pixels: Option<u32> },
-    IsVisible { selector: String },
+    Press {
+        key: String,
+    },
+    Hover {
+        selector: String,
+    },
+    Scroll {
+        direction: String,
+        #[serde(default)]
+        pixels: Option<u32>,
+    },
+    IsVisible {
+        selector: String,
+    },
     Close,
 }
 
 #[async_trait]
 impl Tool for BrowserTool {
-    fn name(&self) -> &str { "browser" }
+    fn name(&self) -> &str {
+        "browser"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -252,7 +279,11 @@ impl Tool for BrowserTool {
                 self.to_result(resp)
             }
 
-            BrowserAction::Snapshot { interactive_only, compact, depth } => {
+            BrowserAction::Snapshot {
+                interactive_only,
+                compact,
+                depth,
+            } => {
                 let mut args = vec!["snapshot"];
                 if interactive_only {
                     args.push("-i");
@@ -362,7 +393,8 @@ impl Tool for BrowserTool {
 /// Extract host from URL
 fn extract_host(url: &str) -> anyhow::Result<String> {
     let parsed = reqwest::Url::parse(url)?;
-    parsed.host_str()
+    parsed
+        .host_str()
         .map(|h| h.to_string())
         .ok_or_else(|| anyhow::anyhow!("No host in URL"))
 }

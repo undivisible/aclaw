@@ -3,40 +3,40 @@
 //! Requires `swarm` feature for SurrealDB + RocksDB storage backend.
 //! Without the feature, only basic task queue and agent registry types are available.
 
+pub mod agent_registry;
 pub mod models;
 pub mod task_queue;
-pub mod agent_registry;
 
-#[cfg(feature = "swarm")]
-pub mod storage;
 #[cfg(feature = "swarm")]
 pub mod coordinator;
 #[cfg(feature = "swarm")]
 pub mod delegation;
 #[cfg(feature = "swarm")]
-pub mod team;
+pub mod evaluate;
 #[cfg(feature = "swarm")]
 pub mod handoff;
 #[cfg(feature = "swarm")]
-pub mod evaluate;
-#[cfg(feature = "swarm")]
 pub mod scheduler;
+#[cfg(feature = "swarm")]
+pub mod storage;
+#[cfg(feature = "swarm")]
+pub mod team;
 
-pub use task_queue::{Task, TaskStatus, TaskPriority};
-pub use agent_registry::{AgentInfo, AgentCapability, AgentStatus};
+pub use agent_registry::{AgentCapability, AgentInfo, AgentStatus};
 pub use models::*;
+pub use task_queue::{Task, TaskPriority, TaskStatus};
 
 #[cfg(feature = "swarm")]
 pub use coordinator::SwarmCoordinator;
 #[cfg(feature = "swarm")]
-pub use storage::{SwarmStorage, SurrealBackend, RocksCache};
-#[cfg(feature = "swarm")]
 pub use delegation::DelegationManager;
 #[cfg(feature = "swarm")]
-pub use team::TeamManager;
+pub use evaluate::{evaluate_loop, EvalResult, EvaluateConfig};
 #[cfg(feature = "swarm")]
 pub use handoff::HandoffManager;
 #[cfg(feature = "swarm")]
-pub use evaluate::{evaluate_loop, EvaluateConfig, EvalResult};
+pub use scheduler::{ConcurrencyScheduler, ExecutionSlot, Lane};
 #[cfg(feature = "swarm")]
-pub use scheduler::{ConcurrencyScheduler, Lane, ExecutionSlot};
+pub use storage::{RocksCache, SurrealBackend, SwarmStorage};
+#[cfg(feature = "swarm")]
+pub use team::TeamManager;

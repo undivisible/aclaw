@@ -3,13 +3,21 @@
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use rusqlite::Connection;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use super::traits::*;
 
 #[derive(Clone)]
 pub struct SqliteMemory {
-    conn: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
+}
+
+struct ConnectionPool {
+    connections: Vec<Mutex<Connection>>,
+    next: AtomicUsize,
 }
 
 impl SqliteMemory {
@@ -17,70 +25,105 @@ impl SqliteMemory {
         if let Some(parent) = std::path::Path::new(path).parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(path)?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            CREATE TABLE IF NOT EXISTS memories (
-                namespace TEXT NOT NULL,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
-                metadata TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (namespace, key)
-            );
-            CREATE TABLE IF NOT EXISTS embeddings (
-                namespace TEXT NOT NULL,
-                key TEXT NOT NULL,
-                vector BLOB NOT NULL,
-                text TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (namespace, key),
-                FOREIGN KEY (namespace, key) REFERENCES memories(namespace, key) ON DELETE CASCADE
-            );
-            CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id TEXT NOT NULL,
-                sender_id TEXT,
-                sender_name TEXT,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-                metadata TEXT
-            );
-            CREATE TABLE IF NOT EXISTS files (
-                path TEXT PRIMARY KEY,
-                hash TEXT NOT NULL,
-                last_indexed TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS chunks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_path TEXT NOT NULL,
-                start_line INTEGER NOT NULL,
-                end_line INTEGER NOT NULL,
-                content TEXT NOT NULL,
-                embedding BLOB,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(namespace, key, value);
-            CREATE TABLE IF NOT EXISTS sticker_cache (
-                sticker_id TEXT PRIMARY KEY,
-                file_id TEXT NOT NULL,
-                description TEXT,
-                analyzed_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_memories_ns ON memories(namespace);
-            CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_embeddings_ns ON embeddings(namespace);
-            CREATE INDEX IF NOT EXISTS idx_conv_chat ON conversations(chat_id, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_path);"
-        )?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        let pool_size = if path == ":memory:" { 1 } else { 4 };
+        let mut connections = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
+            let conn = Connection::open(path)?;
+            initialize_connection(&conn)?;
+            connections.push(Mutex::new(conn));
+        }
+        Ok(Self {
+            pool: Arc::new(ConnectionPool {
+                connections,
+                next: AtomicUsize::new(0),
+            }),
+        })
     }
 
     pub fn in_memory() -> anyhow::Result<Self> {
         Self::new(":memory:")
     }
+
+    fn connection_index(&self) -> usize {
+        let len = self.pool.connections.len();
+        self.pool.next.fetch_add(1, Ordering::Relaxed) % len
+    }
+
+    fn build_fts_query(query: &str) -> Option<String> {
+        let terms: Vec<String> = query
+            .split_whitespace()
+            .map(str::trim)
+            .filter(|term| !term.is_empty())
+            .map(|term| format!("\"{}\"*", term.replace('"', "\"\"")))
+            .collect();
+        if terms.is_empty() {
+            None
+        } else {
+            Some(terms.join(" AND "))
+        }
+    }
+}
+
+fn initialize_connection(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+        PRAGMA synchronous=NORMAL;
+        PRAGMA foreign_keys=ON;
+        CREATE TABLE IF NOT EXISTS memories (
+            namespace TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            metadata TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (namespace, key)
+        );
+        CREATE TABLE IF NOT EXISTS embeddings (
+            namespace TEXT NOT NULL,
+            key TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (namespace, key),
+            FOREIGN KEY (namespace, key) REFERENCES memories(namespace, key) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id TEXT NOT NULL,
+            sender_id TEXT,
+            sender_name TEXT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+            metadata TEXT
+        );
+        CREATE TABLE IF NOT EXISTS files (
+            path TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            last_indexed TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT NOT NULL,
+            start_line INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            embedding BLOB,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(namespace, key, value);
+        CREATE TABLE IF NOT EXISTS sticker_cache (
+            sticker_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            description TEXT,
+            analyzed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_memories_ns ON memories(namespace);
+        CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_embeddings_ns ON embeddings(namespace);
+        CREATE INDEX IF NOT EXISTS idx_conv_chat ON conversations(chat_id, timestamp, id);
+        CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_path);",
+    )?;
+    Ok(())
 }
 
 fn parse_entry(row: &rusqlite::Row) -> rusqlite::Result<MemoryEntry> {
@@ -91,21 +134,30 @@ fn parse_entry(row: &rusqlite::Row) -> rusqlite::Result<MemoryEntry> {
     Ok(MemoryEntry {
         key: row.get(0)?,
         value: row.get(1)?,
-        metadata: row.get::<_, Option<String>>(2)?.and_then(|s| serde_json::from_str(&s).ok()),
+        metadata: row
+            .get::<_, Option<String>>(2)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
         created_at,
     })
 }
 
 #[async_trait]
 impl MemoryBackend for SqliteMemory {
-    async fn store(&self, namespace: &str, key: &str, value: &str, metadata: Option<serde_json::Value>) -> anyhow::Result<()> {
+    async fn store(
+        &self,
+        namespace: &str,
+        key: &str,
+        value: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> anyhow::Result<()> {
         let ns = namespace.to_string();
         let k = key.to_string();
         let v = value.to_string();
         let meta_str = metadata.map(|m| m.to_string());
-        let conn = Arc::clone(&self.conn);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let guard = conn.lock();
+            let guard = pool.connections[index].lock();
             guard.execute(
                 "INSERT OR REPLACE INTO memories (namespace, key, value, metadata) VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![ns, k, v, meta_str],
@@ -122,9 +174,10 @@ impl MemoryBackend for SqliteMemory {
     async fn recall(&self, namespace: &str, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
         let ns = namespace.to_string();
         let k = key.to_string();
-        let conn = Arc::clone(&self.conn);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<Option<MemoryEntry>> {
-            let guard = conn.lock();
+            let guard = pool.connections[index].lock();
             let mut stmt = guard.prepare(
                 "SELECT key, value, metadata, created_at FROM memories WHERE namespace = ?1 AND key = ?2"
             )?;
@@ -132,43 +185,79 @@ impl MemoryBackend for SqliteMemory {
         }).await?
     }
 
-    async fn search(&self, namespace: &str, query: &str, limit: usize) -> anyhow::Result<Vec<MemoryEntry>> {
+    async fn search(
+        &self,
+        namespace: &str,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
         let ns = namespace.to_string();
-        let pattern = format!("%{}%", query);
-        let conn = Arc::clone(&self.conn);
+        let query = query.to_string();
+        let fallback = format!("%{}%", query);
+        let fts_query = Self::build_fts_query(&query);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
-            let guard = conn.lock();
+            let guard = pool.connections[index].lock();
+            if let Some(fts) = &fts_query {
+                let mut stmt = guard.prepare(
+                    "SELECT m.key, m.value, m.metadata, m.created_at
+                     FROM memory_fts f
+                     JOIN memories m USING(namespace, key)
+                     WHERE f.namespace = ?1 AND memory_fts MATCH ?2
+                     ORDER BY bm25(memory_fts), m.created_at DESC
+                     LIMIT ?3",
+                )?;
+                let entries: Vec<MemoryEntry> = stmt
+                    .query_map(rusqlite::params![ns, fts, limit], parse_entry)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                if !entries.is_empty() {
+                    return Ok(entries);
+                }
+            }
+
             let mut stmt = guard.prepare(
-                "SELECT key, value, metadata, created_at FROM memories \
-                 WHERE namespace = ?1 AND (key LIKE ?2 OR value LIKE ?2) \
-                 ORDER BY created_at DESC LIMIT ?3"
+                "SELECT key, value, metadata, created_at FROM memories
+                 WHERE namespace = ?1 AND (key LIKE ?2 OR value LIKE ?2)
+                 ORDER BY created_at DESC LIMIT ?3",
             )?;
             let entries: Vec<MemoryEntry> = stmt
-                .query_map(rusqlite::params![ns, pattern, limit], parse_entry)?
+                .query_map(rusqlite::params![ns, fallback, limit], parse_entry)?
                 .filter_map(|r| r.ok())
                 .collect();
             Ok(entries)
-        }).await?
+        })
+        .await?
     }
 
     async fn forget(&self, namespace: &str, key: &str) -> anyhow::Result<()> {
         let ns = namespace.to_string();
         let k = key.to_string();
-        let conn = Arc::clone(&self.conn);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let guard = conn.lock();
-            guard.execute("DELETE FROM memories WHERE namespace = ?1 AND key = ?2", rusqlite::params![ns, k])?;
-            guard.execute("DELETE FROM memory_fts WHERE namespace = ?1 AND key = ?2", rusqlite::params![ns, k])?;
+            let guard = pool.connections[index].lock();
+            guard.execute(
+                "DELETE FROM memories WHERE namespace = ?1 AND key = ?2",
+                rusqlite::params![ns, k],
+            )?;
+            guard.execute(
+                "DELETE FROM memory_fts WHERE namespace = ?1 AND key = ?2",
+                rusqlite::params![ns, k],
+            )?;
             Ok(())
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 
     async fn list(&self, namespace: &str) -> anyhow::Result<Vec<MemoryEntry>> {
         let ns = namespace.to_string();
-        let conn = Arc::clone(&self.conn);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
-            let guard = conn.lock();
+            let guard = pool.connections[index].lock();
             let mut stmt = guard.prepare(
                 "SELECT key, value, metadata, created_at FROM memories WHERE namespace = ?1 ORDER BY created_at DESC"
             )?;
@@ -180,14 +269,21 @@ impl MemoryBackend for SqliteMemory {
         }).await?
     }
 
-    async fn store_conversation(&self, chat_id: &str, sender_id: &str, role: &str, content: &str) -> anyhow::Result<()> {
+    async fn store_conversation(
+        &self,
+        chat_id: &str,
+        sender_id: &str,
+        role: &str,
+        content: &str,
+    ) -> anyhow::Result<()> {
         let cid = chat_id.to_string();
         let sid = sender_id.to_string();
         let r = role.to_string();
         let c = content.to_string();
-        let conn = Arc::clone(&self.conn);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let guard = conn.lock();
+            let guard = pool.connections[index].lock();
             guard.execute(
                 "INSERT INTO conversations (chat_id, sender_id, role, content) VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![cid, sid, r, c],
@@ -197,13 +293,52 @@ impl MemoryBackend for SqliteMemory {
         Ok(())
     }
 
-    async fn get_conversation_history(&self, chat_id: &str, limit: usize) -> anyhow::Result<Vec<(String, String)>> {
+    async fn store_conversation_batch(
+        &self,
+        entries: &[(&str, &str, &str, &str)],
+    ) -> anyhow::Result<()> {
+        let entries: Vec<(String, String, String, String)> = entries
+            .iter()
+            .map(|(chat_id, sender_id, role, content)| {
+                (
+                    (*chat_id).to_string(),
+                    (*sender_id).to_string(),
+                    (*role).to_string(),
+                    (*content).to_string(),
+                )
+            })
+            .collect();
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut guard = pool.connections[index].lock();
+            let tx = guard.transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO conversations (chat_id, sender_id, role, content) VALUES (?1, ?2, ?3, ?4)"
+                )?;
+                for (chat_id, sender_id, role, content) in entries {
+                    stmt.execute(rusqlite::params![chat_id, sender_id, role, content])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        }).await??;
+        Ok(())
+    }
+
+    async fn get_conversation_history(
+        &self,
+        chat_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(String, String)>> {
         let cid = chat_id.to_string();
-        let conn = Arc::clone(&self.conn);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         let mut history = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(String, String)>> {
-            let guard = conn.lock();
+            let guard = pool.connections[index].lock();
             let mut stmt = guard.prepare(
-                "SELECT role, content FROM conversations WHERE chat_id = ?1 ORDER BY timestamp DESC LIMIT ?2"
+                "SELECT role, content FROM conversations WHERE chat_id = ?1 ORDER BY id DESC LIMIT ?2"
             )?;
             let rows: Vec<(String, String)> = stmt
                 .query_map(rusqlite::params![cid, limit], |row| {
@@ -219,21 +354,35 @@ impl MemoryBackend for SqliteMemory {
 
     async fn get_sticker_cache(&self, sticker_id: &str) -> anyhow::Result<Option<String>> {
         let sid = sticker_id.to_string();
-        let conn = Arc::clone(&self.conn);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
-            let guard = conn.lock();
-            let mut stmt = guard.prepare("SELECT description FROM sticker_cache WHERE sticker_id = ?1")?;
-            Ok(stmt.query_row(rusqlite::params![sid], |row| row.get::<_, Option<String>>(0)).ok().flatten())
-        }).await?
+            let guard = pool.connections[index].lock();
+            let mut stmt =
+                guard.prepare("SELECT description FROM sticker_cache WHERE sticker_id = ?1")?;
+            Ok(stmt
+                .query_row(rusqlite::params![sid], |row| {
+                    row.get::<_, Option<String>>(0)
+                })
+                .ok()
+                .flatten())
+        })
+        .await?
     }
 
-    async fn store_sticker_cache(&self, sticker_id: &str, file_id: &str, description: &str) -> anyhow::Result<()> {
+    async fn store_sticker_cache(
+        &self,
+        sticker_id: &str,
+        file_id: &str,
+        description: &str,
+    ) -> anyhow::Result<()> {
         let sid = sticker_id.to_string();
         let fid = file_id.to_string();
         let desc = description.to_string();
-        let conn = Arc::clone(&self.conn);
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let guard = conn.lock();
+            let guard = pool.connections[index].lock();
             guard.execute(
                 "INSERT OR REPLACE INTO sticker_cache (sticker_id, file_id, description) VALUES (?1, ?2, ?3)",
                 rusqlite::params![sid, fid, desc],
@@ -251,7 +400,9 @@ mod tests {
     #[tokio::test]
     async fn test_store_and_recall() {
         let mem = SqliteMemory::in_memory().unwrap();
-        mem.store("test", "greeting", "hello world", None).await.unwrap();
+        mem.store("test", "greeting", "hello world", None)
+            .await
+            .unwrap();
         let entry = mem.recall("test", "greeting").await.unwrap();
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().value, "hello world");
@@ -260,8 +411,12 @@ mod tests {
     #[tokio::test]
     async fn test_search() {
         let mem = SqliteMemory::in_memory().unwrap();
-        mem.store("test", "color", "blue is my favorite", None).await.unwrap();
-        mem.store("test", "food", "pizza is great", None).await.unwrap();
+        mem.store("test", "color", "blue is my favorite", None)
+            .await
+            .unwrap();
+        mem.store("test", "food", "pizza is great", None)
+            .await
+            .unwrap();
         let results = mem.search("test", "favorite", 10).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].key, "color");
@@ -270,8 +425,12 @@ mod tests {
     #[tokio::test]
     async fn test_conversation_history() {
         let mem = SqliteMemory::in_memory().unwrap();
-        mem.store_conversation("chat1", "user1", "user", "hello").await.unwrap();
-        mem.store_conversation("chat1", "bot", "assistant", "hi there").await.unwrap();
+        mem.store_conversation("chat1", "user1", "user", "hello")
+            .await
+            .unwrap();
+        mem.store_conversation("chat1", "bot", "assistant", "hi there")
+            .await
+            .unwrap();
         let history = mem.get_conversation_history("chat1", 10).await.unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].0, "user");

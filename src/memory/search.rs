@@ -82,13 +82,22 @@ pub fn memory_search(workspace: &Path, query: &str, max_results: usize) -> Vec<S
     }
 
     // Sort by score descending
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(max_results);
     results
 }
 
 /// Get specific lines from a memory file
-pub fn memory_get(workspace: &Path, file_path: &str, from_line: usize, num_lines: usize) -> Option<String> {
+pub fn memory_get(
+    workspace: &Path,
+    file_path: &str,
+    from_line: usize,
+    num_lines: usize,
+) -> Option<String> {
     let full_path = workspace.join(file_path);
 
     // Security: ensure path stays within workspace
@@ -113,9 +122,9 @@ pub fn memory_get(workspace: &Path, file_path: &str, from_line: usize, num_lines
 
 // -- Tool wrappers for the agent loop --
 
+use crate::tools::{Tool, ToolResult, ToolSpec};
 use async_trait::async_trait;
 use serde_json::json;
-use crate::tools::{Tool, ToolResult, ToolSpec};
 
 /// Tool: memory_search — search memory files for a query.
 pub struct MemorySearchTool {
@@ -137,7 +146,9 @@ impl Tool for MemorySearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "memory_search".to_string(),
-            description: "Search workspace memory files (MEMORY.md, memory/*.md) for relevant information.".to_string(),
+            description:
+                "Search workspace memory files (MEMORY.md, memory/*.md) for relevant information."
+                    .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -163,9 +174,18 @@ impl Tool for MemorySearchTool {
             return Ok(ToolResult::success("No results found."));
         }
 
-        let output: Vec<String> = results.iter().map(|r| {
-            format!("{}:{} (score {:.1}) — {}", r.path, r.line_number, r.score, r.snippet.replace('\n', " | "))
-        }).collect();
+        let output: Vec<String> = results
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}:{} (score {:.1}) — {}",
+                    r.path,
+                    r.line_number,
+                    r.score,
+                    r.snippet.replace('\n', " | ")
+                )
+            })
+            .collect();
 
         Ok(ToolResult::success(output.join("\n")))
     }

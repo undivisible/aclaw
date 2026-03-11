@@ -27,7 +27,9 @@ impl SignalChannel {
 
 #[async_trait]
 impl Channel for SignalChannel {
-    fn name(&self) -> &str { "signal" }
+    fn name(&self) -> &str {
+        "signal"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (tx, rx) = mpsc::channel(32);
@@ -51,13 +53,16 @@ impl Channel for SignalChannel {
                             let envelope = &msg["envelope"];
                             let data = &envelope["dataMessage"];
                             let text = data["message"].as_str().unwrap_or("").to_string();
-                            if text.is_empty() { continue; }
+                            if text.is_empty() {
+                                continue;
+                            }
 
                             let incoming = IncomingMessage {
                                 id: envelope["timestamp"].to_string(),
                                 sender_id: envelope["source"].as_str().unwrap_or("").to_string(),
                                 sender_name: envelope["sourceName"].as_str().map(|s| s.to_string()),
-                                chat_id: data["groupInfo"]["groupId"].as_str()
+                                chat_id: data["groupInfo"]["groupId"]
+                                    .as_str()
                                     .unwrap_or(envelope["source"].as_str().unwrap_or(""))
                                     .to_string(),
                                 text,
@@ -66,7 +71,9 @@ impl Channel for SignalChannel {
                                 timestamp: chrono::Utc::now(),
                             };
 
-                            if tx.send(incoming).await.is_err() { return; }
+                            if tx.send(incoming).await.is_err() {
+                                return;
+                            }
                         }
                     }
                 }

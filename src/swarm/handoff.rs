@@ -32,14 +32,24 @@ impl HandoffManager {
         context: Option<String>,
     ) -> Result<HandoffRoute> {
         // Verify agents exist (by name)
-        let from = self.storage.get_agent_by_name(from_agent).await?
+        let from = self
+            .storage
+            .get_agent_by_name(from_agent)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Source agent '{}' not found", from_agent))?;
-        let to = self.storage.get_agent_by_name(to_agent).await?
+        let to = self
+            .storage
+            .get_agent_by_name(to_agent)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Target agent '{}' not found", to_agent))?;
 
         // Verify target agent is active
         if to.status.to_string() != "active" {
-            bail!("Target agent '{}' is not active (status: {:?})", to_agent, to.status);
+            bail!(
+                "Target agent '{}' is not active (status: {:?})",
+                to_agent,
+                to.status
+            );
         }
 
         let mut route = HandoffRoute::new(
@@ -62,7 +72,12 @@ impl HandoffManager {
     }
 
     /// Resolve which agent should handle this conversation
-    pub async fn resolve_agent(&self, channel: &str, chat_id: &str, default_agent: &str) -> Result<String> {
+    pub async fn resolve_agent(
+        &self,
+        channel: &str,
+        chat_id: &str,
+        default_agent: &str,
+    ) -> Result<String> {
         match self.storage.get_handoff_route(channel, chat_id).await? {
             Some(route) => Ok(route.to_agent_key),
             None => Ok(default_agent.to_string()),

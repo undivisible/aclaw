@@ -10,7 +10,7 @@
 use anyhow::{bail, Result};
 use std::sync::Arc;
 
-use crate::providers::{ChatRequest, ChatMessage, Provider};
+use crate::providers::{ChatMessage, ChatRequest, Provider};
 
 /// Configuration for an evaluate loop
 #[derive(Debug, Clone)]
@@ -83,20 +83,19 @@ pub async fn evaluate_loop(
     }
 
     let mut rounds = Vec::new();
-    let mut conversation: Vec<ChatMessage> = vec![
-        ChatMessage {
-            role: "user".to_string(),
-            content: config.generator_prompt.clone(),
-            tool_use_id: None,
-        },
-    ];
+    let mut conversation: Vec<ChatMessage> = vec![ChatMessage {
+        role: "user".to_string(),
+        content: config.generator_prompt.clone(),
+        tool_use_id: None,
+    }];
 
     for round in 1..=config.max_rounds {
         // Step 1: Generate
+        let generator_model = config.generator_model.clone();
         let gen_request = ChatRequest {
-            messages: conversation.clone(),
+            messages: &conversation,
             tools: None,
-            model: config.generator_model.clone(),
+            model: &generator_model,
             temperature: config.generator_temperature,
             max_tokens: Some(4096),
         };
@@ -116,15 +115,17 @@ pub async fn evaluate_loop(
             "{}\n\n---\n\nContent to evaluate:\n{}\n\n---\n\nRespond with JSON: {{\"score\": 0.0-1.0, \"feedback\": \"...\", \"passed\": true/false}}",
             config.evaluator_prompt, output
         );
+        let eval_messages = [ChatMessage {
+            role: "user".to_string(),
+            content: eval_prompt,
+            tool_use_id: None,
+        }];
+        let evaluator_model = config.evaluator_model.clone();
 
         let eval_request = ChatRequest {
-            messages: vec![ChatMessage {
-                role: "user".to_string(),
-                content: eval_prompt,
-                tool_use_id: None,
-            }],
+            messages: &eval_messages,
             tools: None,
-            model: config.evaluator_model.clone(),
+            model: &evaluator_model,
             temperature: config.evaluator_temperature,
             max_tokens: Some(1024),
         };
@@ -167,8 +168,13 @@ pub async fn evaluate_loop(
     }
 
     // Return best result even if it didn't pass
-    let best = rounds.iter()
-        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))
+    let best = rounds
+        .iter()
+        .max_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .unwrap();
 
     Ok(EvalResult {

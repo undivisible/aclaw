@@ -40,7 +40,9 @@ impl WhatsAppChannel {
 
 #[async_trait]
 impl Channel for WhatsAppChannel {
-    fn name(&self) -> &str { "whatsapp" }
+    fn name(&self) -> &str {
+        "whatsapp"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (tx, rx) = mpsc::channel(32);
@@ -51,57 +53,85 @@ impl Channel for WhatsAppChannel {
         let _access_token = self.access_token.clone();
 
         tokio::spawn(async move {
-            use axum::{Router, routing::{get, post}, extract::Query, Json};
-            
+            use axum::{
+                extract::Query,
+                routing::{get, post},
+                Json, Router,
+            };
+
             let tx_clone = tx.clone();
             let verify = verify_token.clone();
 
             let app = Router::new()
-                .route("/webhook", get(move |Query(params): Query<std::collections::HashMap<String, String>>| {
-                    let v = verify.clone();
-                    async move {
-                        // Webhook verification
-                        if params.get("hub.verify_token").map(|t| t.as_str()) == Some(&v) {
-                            params.get("hub.challenge").cloned().unwrap_or_default()
-                        } else {
-                            "Forbidden".to_string()
-                        }
-                    }
-                }))
-                .route("/webhook", post(move |Json(body): Json<Value>| {
-                    let tx = tx_clone.clone();
-                    async move {
-                        // Parse incoming WhatsApp message
-                        if let Some(entries) = body["entry"].as_array() {
-                            for entry in entries {
-                                if let Some(changes) = entry["changes"].as_array() {
-                                    for change in changes {
-                                        if let Some(messages) = change["value"]["messages"].as_array() {
-                                            for msg in messages {
-                                                let text = msg["text"]["body"].as_str().unwrap_or("").to_string();
-                                                if text.is_empty() { continue; }
+                .route(
+                    "/webhook",
+                    get(
+                        move |Query(params): Query<std::collections::HashMap<String, String>>| {
+                            let v = verify.clone();
+                            async move {
+                                // Webhook verification
+                                if params.get("hub.verify_token").map(|t| t.as_str()) == Some(&v) {
+                                    params.get("hub.challenge").cloned().unwrap_or_default()
+                                } else {
+                                    "Forbidden".to_string()
+                                }
+                            }
+                        },
+                    ),
+                )
+                .route(
+                    "/webhook",
+                    post(move |Json(body): Json<Value>| {
+                        let tx = tx_clone.clone();
+                        async move {
+                            // Parse incoming WhatsApp message
+                            if let Some(entries) = body["entry"].as_array() {
+                                for entry in entries {
+                                    if let Some(changes) = entry["changes"].as_array() {
+                                        for change in changes {
+                                            if let Some(messages) =
+                                                change["value"]["messages"].as_array()
+                                            {
+                                                for msg in messages {
+                                                    let text = msg["text"]["body"]
+                                                        .as_str()
+                                                        .unwrap_or("")
+                                                        .to_string();
+                                                    if text.is_empty() {
+                                                        continue;
+                                                    }
 
-                                                let incoming = IncomingMessage {
-                                                    id: msg["id"].as_str().unwrap_or("").to_string(),
-                                                    sender_id: msg["from"].as_str().unwrap_or("").to_string(),
-                                                    sender_name: None,
-                                                    chat_id: msg["from"].as_str().unwrap_or("").to_string(),
-                                                    text,
-                                                    is_group: false,
-                                                    reply_to: None,
-                                                    timestamp: chrono::Utc::now(),
-                                                };
+                                                    let incoming = IncomingMessage {
+                                                        id: msg["id"]
+                                                            .as_str()
+                                                            .unwrap_or("")
+                                                            .to_string(),
+                                                        sender_id: msg["from"]
+                                                            .as_str()
+                                                            .unwrap_or("")
+                                                            .to_string(),
+                                                        sender_name: None,
+                                                        chat_id: msg["from"]
+                                                            .as_str()
+                                                            .unwrap_or("")
+                                                            .to_string(),
+                                                        text,
+                                                        is_group: false,
+                                                        reply_to: None,
+                                                        timestamp: chrono::Utc::now(),
+                                                    };
 
-                                                let _ = tx.send(incoming).await;
+                                                    let _ = tx.send(incoming).await;
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
+                            "OK"
                         }
-                        "OK"
-                    }
-                }));
+                    }),
+                );
 
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
             axum::serve(listener, app).await.unwrap();

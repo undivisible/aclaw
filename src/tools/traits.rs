@@ -21,10 +21,16 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn success(output: impl Into<String>) -> Self {
-        Self { output: output.into(), is_error: false }
+        Self {
+            output: output.into(),
+            is_error: false,
+        }
     }
     pub fn error(output: impl Into<String>) -> Self {
-        Self { output: output.into(), is_error: true }
+        Self {
+            output: output.into(),
+            is_error: true,
+        }
     }
 }
 

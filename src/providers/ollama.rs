@@ -11,7 +11,9 @@ pub struct OllamaProvider {
 
 impl OllamaProvider {
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self { base_url: base_url.into() }
+        Self {
+            base_url: base_url.into(),
+        }
     }
 
     pub fn default() -> Self {
@@ -21,7 +23,9 @@ impl OllamaProvider {
 
 #[async_trait]
 impl Provider for OllamaProvider {
-    fn name(&self) -> &str { "ollama" }
+    fn name(&self) -> &str {
+        "ollama"
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
@@ -32,15 +36,17 @@ impl Provider for OllamaProvider {
         }
     }
 
-    async fn chat(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse> {
+    async fn chat(&self, request: &ChatRequest<'_>) -> anyhow::Result<ChatResponse> {
         let client = reqwest::Client::new();
 
-        let messages: Vec<Value> = request.messages.iter()
+        let messages: Vec<Value> = request
+            .messages
+            .iter()
             .map(|m| serde_json::json!({ "role": &m.role, "content": &m.content }))
             .collect();
 
         let body = serde_json::json!({
-            "model": &request.model,
+            "model": request.model,
             "messages": messages,
             "stream": false,
             "options": {

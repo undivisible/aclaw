@@ -62,7 +62,7 @@ pub struct CostTracker {
 impl CostTracker {
     pub fn new() -> Self {
         let mut models = Vec::new();
-        
+
         // Add standard model pricing (as of 2024)
         models.push(ModelCost {
             model: "claude-opus-4-6".to_string(),
@@ -94,14 +94,14 @@ impl CostTracker {
             input_cost_per_1m: 0.075,
             output_cost_per_1m: 0.3,
         });
-        
+
         Self {
             costs: Arc::new(RwLock::new(Vec::new())),
             models: Arc::new(RwLock::new(models)),
             rate_limit_status: Arc::new(RwLock::new(None)),
         }
     }
-    
+
     /// Record a cost from an LLM call
     pub async fn record(&self, model: &str, usage: TokenUsage) -> anyhow::Result<()> {
         let models = self.models.read().await;
@@ -114,9 +114,9 @@ impl CostTracker {
                 input_cost_per_1m: 0.0,
                 output_cost_per_1m: 0.0,
             });
-        
+
         let cost_usd = usage.calculate_cost(&model_cost);
-        
+
         let record = CostRecord {
             id: uuid::Uuid::new_v4().to_string(),
             model: model.to_string(),
@@ -125,23 +125,23 @@ impl CostTracker {
             cost_usd,
             timestamp: chrono::Utc::now(),
         };
-        
+
         self.costs.write().await.push(record);
         Ok(())
     }
-    
+
     /// Get cost summary
     pub async fn summary(&self) -> CostSummary {
         let costs = self.costs.read().await;
-        
+
         let total_cost: f64 = costs.iter().map(|c| c.cost_usd).sum();
         let total_tokens: usize = costs.iter().map(|c| c.input_tokens + c.output_tokens).sum();
-        
+
         let mut by_model: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         for cost in costs.iter() {
             *by_model.entry(cost.model.clone()).or_insert(0.0) += cost.cost_usd;
         }
-        
+
         CostSummary {
             total_cost,
             total_tokens,
@@ -149,48 +149,55 @@ impl CostTracker {
             call_count: costs.len(),
         }
     }
-    
+
     /// Get cost history (with date filtering)
     pub async fn history(&self, days: usize) -> Vec<CostRecord> {
         let costs = self.costs.read().await;
         let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
-        
+
         costs
             .iter()
             .filter(|c| c.timestamp > cutoff)
             .cloned()
             .collect()
     }
-    
+
     /// Update rate limit status from Anthropic API response headers
     pub async fn update_rate_limits(&self, headers: &reqwest::header::HeaderMap) {
         let status = RateLimitStatus {
-            requests_limit: headers.get("anthropic-ratelimit-requests-limit")
+            requests_limit: headers
+                .get("anthropic-ratelimit-requests-limit")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            requests_remaining: headers.get("anthropic-ratelimit-requests-remaining")
+            requests_remaining: headers
+                .get("anthropic-ratelimit-requests-remaining")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            input_tokens_limit: headers.get("anthropic-ratelimit-input-tokens-limit")
+            input_tokens_limit: headers
+                .get("anthropic-ratelimit-input-tokens-limit")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            input_tokens_remaining: headers.get("anthropic-ratelimit-input-tokens-remaining")
+            input_tokens_remaining: headers
+                .get("anthropic-ratelimit-input-tokens-remaining")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            output_tokens_limit: headers.get("anthropic-ratelimit-output-tokens-limit")
+            output_tokens_limit: headers
+                .get("anthropic-ratelimit-output-tokens-limit")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            output_tokens_remaining: headers.get("anthropic-ratelimit-output-tokens-remaining")
+            output_tokens_remaining: headers
+                .get("anthropic-ratelimit-output-tokens-remaining")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            tokens_reset: headers.get("anthropic-ratelimit-tokens-reset")
+            tokens_reset: headers
+                .get("anthropic-ratelimit-tokens-reset")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string()),
         };
-        
+
         *self.rate_limit_status.write().await = Some(status);
     }
-    
+
     /// Get current rate limit status
     pub async fn get_rate_limits(&self) -> Option<RateLimitStatus> {
         self.rate_limit_status.read().await.clone()
@@ -216,13 +223,13 @@ mod tests {
             input_cost_per_1m: 1.0,
             output_cost_per_1m: 2.0,
         };
-        
+
         let usage = TokenUsage {
             input_tokens: 1_000_000,
             output_tokens: 1_000_000,
             total_tokens: 2_000_000,
         };
-        
+
         let calculated = usage.calculate_cost(&cost);
         assert_eq!(calculated, 3.0); // 1.0 + 2.0
     }
@@ -230,13 +237,19 @@ mod tests {
     #[tokio::test]
     async fn test_cost_tracking() {
         let tracker = CostTracker::new();
-        
-        tracker.record("claude-opus-4-6", TokenUsage {
-            input_tokens: 100,
-            output_tokens: 50,
-            total_tokens: 150,
-        }).await.unwrap();
-        
+
+        tracker
+            .record(
+                "claude-opus-4-6",
+                TokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    total_tokens: 150,
+                },
+            )
+            .await
+            .unwrap();
+
         let summary = tracker.summary().await;
         assert_eq!(summary.call_count, 1);
         assert!(summary.total_cost > 0.0);

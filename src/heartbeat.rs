@@ -31,9 +31,8 @@ pub fn start_heartbeat(
     tx: mpsc::Sender<IncomingMessage>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(
-            tokio::time::Duration::from_secs(config.interval_secs),
-        );
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_secs(config.interval_secs));
 
         // Skip first tick (immediate)
         interval.tick().await;
@@ -112,7 +111,10 @@ fn update_heartbeat_state(workspace: &Path) {
         }
     });
 
-    let _ = std::fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap_or_default());
+    let _ = std::fs::write(
+        &state_path,
+        serde_json::to_string_pretty(&state).unwrap_or_default(),
+    );
 }
 
 use chrono::Timelike;

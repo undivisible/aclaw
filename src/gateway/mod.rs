@@ -3,4 +3,4 @@
 
 pub mod server;
 
-pub use server::{Gateway, ChatRequest, ChatResponse, ContainerStatus, start_gateway};
+pub use server::{start_gateway, ChatRequest, ChatResponse, ContainerStatus, Gateway};

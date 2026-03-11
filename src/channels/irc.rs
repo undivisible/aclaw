@@ -1,9 +1,9 @@
 //! IRC channel — simple IRC protocol client
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 
 use super::traits::*;
 
@@ -16,7 +16,11 @@ pub struct IrcChannel {
 }
 
 impl IrcChannel {
-    pub fn new(server: impl Into<String>, channel: impl Into<String>, nick: impl Into<String>) -> Self {
+    pub fn new(
+        server: impl Into<String>,
+        channel: impl Into<String>,
+        nick: impl Into<String>,
+    ) -> Self {
         Self {
             server: server.into(),
             port: 6667,
@@ -39,7 +43,9 @@ impl IrcChannel {
 
 #[async_trait]
 impl Channel for IrcChannel {
-    fn name(&self) -> &str { "irc" }
+    fn name(&self) -> &str {
+        "irc"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (tx, rx) = mpsc::channel(32);
@@ -63,11 +69,19 @@ impl Channel for IrcChannel {
 
             // Register
             if let Some(pass) = &password {
-                let _ = writer.write_all(format!("PASS {}\r\n", pass).as_bytes()).await;
+                let _ = writer
+                    .write_all(format!("PASS {}\r\n", pass).as_bytes())
+                    .await;
             }
-            let _ = writer.write_all(format!("NICK {}\r\n", nick).as_bytes()).await;
-            let _ = writer.write_all(format!("USER {} 0 * :aclaw bot\r\n", nick).as_bytes()).await;
-            let _ = writer.write_all(format!("JOIN {}\r\n", channel).as_bytes()).await;
+            let _ = writer
+                .write_all(format!("NICK {}\r\n", nick).as_bytes())
+                .await;
+            let _ = writer
+                .write_all(format!("USER {} 0 * :aclaw bot\r\n", nick).as_bytes())
+                .await;
+            let _ = writer
+                .write_all(format!("JOIN {}\r\n", channel).as_bytes())
+                .await;
 
             let mut line = String::new();
             loop {
@@ -80,7 +94,9 @@ impl Channel for IrcChannel {
                         // Handle PING
                         if trimmed.starts_with("PING") {
                             let response = trimmed.replace("PING", "PONG");
-                            let _ = writer.write_all(format!("{}\r\n", response).as_bytes()).await;
+                            let _ = writer
+                                .write_all(format!("{}\r\n", response).as_bytes())
+                                .await;
                             continue;
                         }
 
@@ -97,7 +113,9 @@ impl Channel for IrcChannel {
                                 timestamp: chrono::Utc::now(),
                             };
 
-                            if tx.send(incoming).await.is_err() { return; }
+                            if tx.send(incoming).await.is_err() {
+                                return;
+                            }
                         }
                     }
                     Err(_) => break,
@@ -128,15 +146,23 @@ struct IrcPrivMsg {
 
 fn parse_privmsg(line: &str) -> Option<IrcPrivMsg> {
     // :nick!user@host PRIVMSG #channel :message
-    if !line.contains("PRIVMSG") { return None; }
+    if !line.contains("PRIVMSG") {
+        return None;
+    }
 
     let parts: Vec<&str> = line.splitn(4, ' ').collect();
-    if parts.len() < 4 { return None; }
+    if parts.len() < 4 {
+        return None;
+    }
 
     let prefix = parts[0].trim_start_matches(':');
     let nick = prefix.split('!').next()?.to_string();
     let target = parts[2].to_string();
     let message = parts[3].trim_start_matches(':').to_string();
 
-    Some(IrcPrivMsg { nick, target, message })
+    Some(IrcPrivMsg {
+        nick,
+        target,
+        message,
+    })
 }

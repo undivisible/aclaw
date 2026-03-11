@@ -32,12 +32,15 @@ struct MessageArgs {
 
 #[async_trait]
 impl Tool for MessageTool {
-    fn name(&self) -> &str { "message" }
+    fn name(&self) -> &str {
+        "message"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "message".to_string(),
-            description: "Send, edit, or delete Telegram messages. Actions: send, edit, delete.".to_string(),
+            description: "Send, edit, or delete Telegram messages. Actions: send, edit, delete."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -70,13 +73,18 @@ impl Tool for MessageTool {
                     return Ok(ToolResult::error("Message text required for send action"));
                 }
                 let msg_id = self.tg.send_message(&text).await?;
-                Ok(ToolResult::success(format!("Sent message (id: {})", msg_id)))
+                Ok(ToolResult::success(format!(
+                    "Sent message (id: {})",
+                    msg_id
+                )))
             }
             "edit" => {
                 let msg_id = args.message_id.unwrap_or(0);
                 let text = args.message.unwrap_or_default();
                 if msg_id == 0 || text.is_empty() {
-                    return Ok(ToolResult::error("message_id and message required for edit action"));
+                    return Ok(ToolResult::error(
+                        "message_id and message required for edit action",
+                    ));
                 }
                 self.tg.edit_message(msg_id, &text).await?;
                 Ok(ToolResult::success(format!("Edited message {}", msg_id)))

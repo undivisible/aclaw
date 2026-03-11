@@ -29,12 +29,15 @@ struct SearchArgs {
 
 #[async_trait]
 impl Tool for WebSearchTool {
-    fn name(&self) -> &str { "web_search" }
+    fn name(&self) -> &str {
+        "web_search"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "web_search".to_string(),
-            description: "Search the web for information. Returns relevant results with snippets.".to_string(),
+            description: "Search the web for information. Returns relevant results with snippets."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -73,7 +76,11 @@ impl Tool for WebSearchTool {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Ok(ToolResult::error(format!("Search API error {}: {}", status, &text[..text.len().min(200)])));
+            return Ok(ToolResult::error(format!(
+                "Search API error {}: {}",
+                status,
+                &text[..text.len().min(200)]
+            )));
         }
 
         let data: serde_json::Value = resp.json().await?;

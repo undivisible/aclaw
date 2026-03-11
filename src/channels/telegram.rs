@@ -104,10 +104,10 @@ fn sanitize_markdown(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut in_code_block = false;
     let mut in_table = false;
-    
+
     for line in lines {
         let trimmed = line.trim();
-        
+
         // Track code blocks
         if trimmed.starts_with("```") {
             in_code_block = !in_code_block;
@@ -117,14 +117,14 @@ fn sanitize_markdown(text: &str) -> String {
                 continue;
             }
         }
-        
+
         // Inside code blocks, pass through unchanged
         if in_code_block {
             result.push_str(line);
             result.push('\n');
             continue;
         }
-        
+
         // Strip Markdown headers (Telegram doesn't support them)
         if trimmed.starts_with('#') {
             // Convert headers to bold text (Telegram Markdown uses single asterisks)
@@ -134,19 +134,23 @@ fn sanitize_markdown(text: &str) -> String {
             }
             continue;
         }
-        
+
         // Detect table rows (contain pipes, not inside code)
         if trimmed.contains('|') && !trimmed.is_empty() {
-            let cells: Vec<&str> = trimmed.split('|')
+            let cells: Vec<&str> = trimmed
+                .split('|')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
-            
+
             // Skip separator rows (only dashes/spaces)
-            if cells.iter().all(|c| c.chars().all(|ch| ch == '-' || ch == ' ')) {
+            if cells
+                .iter()
+                .all(|c| c.chars().all(|ch| ch == '-' || ch == ' '))
+            {
                 continue;
             }
-            
+
             // Convert to bullet list
             if !cells.is_empty() {
                 in_table = true;
@@ -156,12 +160,12 @@ fn sanitize_markdown(text: &str) -> String {
         } else if in_table && !trimmed.is_empty() {
             in_table = false;
         }
-        
+
         // Pass through other lines unchanged
         result.push_str(line);
         result.push('\n');
     }
-    
+
     result.trim_end().to_string()
 }
 
@@ -170,13 +174,13 @@ fn chunk_message(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
         return vec![text.to_string()];
     }
-    
+
     let mut chunks = Vec::new();
     let mut current = String::new();
-    
+
     // First, try splitting by paragraphs (double newline)
     let paragraphs: Vec<&str> = text.split("\n\n").collect();
-    
+
     for para in paragraphs {
         // If adding this paragraph would exceed limit
         if current.len() + para.len() + 2 > max_len {
@@ -185,7 +189,7 @@ fn chunk_message(text: &str, max_len: usize) -> Vec<String> {
                 chunks.push(current.clone());
                 current.clear();
             }
-            
+
             // If the paragraph itself is too long, split by sentences
             if para.len() > max_len {
                 let sentences: Vec<&str> = para.split(". ").collect();
@@ -195,7 +199,7 @@ fn chunk_message(text: &str, max_len: usize) -> Vec<String> {
                     } else {
                         sent.to_string()
                     };
-                    
+
                     if current.len() + sentence.len() > max_len {
                         if !current.is_empty() {
                             chunks.push(current.clone());
@@ -223,12 +227,12 @@ fn chunk_message(text: &str, max_len: usize) -> Vec<String> {
             current.push_str(para);
         }
     }
-    
+
     // Add remaining
     if !current.is_empty() {
         chunks.push(current);
     }
-    
+
     chunks
 }
 
@@ -252,31 +256,31 @@ impl TelegramChannel {
             "https://api.telegram.org/bot{}/getFile?file_id={}",
             self.bot_token, file_id
         );
-        
+
         let resp = self.client.get(&file_info_url).send().await?;
         let body: Value = resp.json().await?;
-        
+
         if body["ok"].as_bool() != Some(true) {
             return Ok(String::new());
         }
-        
+
         let file_path = body["result"]["file_path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No file_path in response"))?;
-        
+
         // Download the file
         let download_url = format!(
             "https://api.telegram.org/file/bot{}/{}",
             self.bot_token, file_path
         );
-        
+
         let file_resp = self.client.get(&download_url).send().await?;
         let file_bytes = file_resp.bytes().await?;
-        
+
         // Create temp file
         let temp_path = format!("/tmp/voice_{}.ogg", uuid::Uuid::new_v4());
         tokio::fs::write(&temp_path, file_bytes).await?;
-        
+
         // Call faster-whisper via Python (async)
         let output = tokio::process::Command::new("python3")
             .arg("-c")
@@ -293,14 +297,12 @@ print(text)
             ))
             .output()
             .await?;
-        
+
         // Clean up temp file
         let _ = tokio::fs::remove_file(&temp_path).await;
-        
+
         if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string())
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
         } else {
             Ok(String::new())
         }
@@ -310,15 +312,16 @@ print(text)
     pub async fn send_message(&self, text: &str) -> anyhow::Result<i64> {
         // Sanitize markdown
         let sanitized = sanitize_markdown(text);
-        
+
         // Chunk if needed
         let chunks = chunk_message(&sanitized, TELEGRAM_MAX_LEN);
-        
+
         let mut last_msg_id = 0;
-        
+
         for (i, chunk) in chunks.iter().enumerate() {
             // Try with Markdown first
-            let resp = self.client
+            let resp = self
+                .client
                 .post(self.api_url("sendMessage"))
                 .json(&serde_json::json!({
                     "chat_id": self.chat_id,
@@ -329,12 +332,13 @@ print(text)
                 .await?;
 
             let body: Value = resp.json().await?;
-            
+
             if body["ok"].as_bool() == Some(true) {
                 last_msg_id = body["result"]["message_id"].as_i64().unwrap_or(0);
             } else {
                 // Markdown failed, retry without parse_mode
-                let resp = self.client
+                let resp = self
+                    .client
                     .post(self.api_url("sendMessage"))
                     .json(&serde_json::json!({
                         "chat_id": self.chat_id,
@@ -345,19 +349,20 @@ print(text)
                 let body: Value = resp.json().await?;
                 last_msg_id = body["result"]["message_id"].as_i64().unwrap_or(0);
             }
-            
+
             // Add delay between chunks to avoid rate limiting
             if i < chunks.len() - 1 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         }
-        
+
         Ok(last_msg_id)
     }
 
     /// Edit an existing message
     pub async fn edit_message(&self, message_id: i64, text: &str) -> anyhow::Result<()> {
-        let _ = self.client
+        let _ = self
+            .client
             .post(self.api_url("editMessageText"))
             .json(&serde_json::json!({
                 "chat_id": self.chat_id,
@@ -371,7 +376,8 @@ print(text)
 
     /// Delete a message
     pub async fn delete_message(&self, message_id: i64) -> anyhow::Result<()> {
-        let _ = self.client
+        let _ = self
+            .client
             .post(self.api_url("deleteMessage"))
             .json(&serde_json::json!({
                 "chat_id": self.chat_id,
@@ -384,7 +390,8 @@ print(text)
 
     /// Send typing indicator
     pub async fn send_typing(&self) -> anyhow::Result<()> {
-        let _ = self.client
+        let _ = self
+            .client
             .post(self.api_url("sendChatAction"))
             .json(&serde_json::json!({
                 "chat_id": self.chat_id,
@@ -429,31 +436,44 @@ impl Channel for TelegramChannel {
         let client = self.client.clone();
 
         tokio::spawn(async move {
-            let ch = TelegramChannel { bot_token, chat_id, client };
+            let ch = TelegramChannel {
+                bot_token,
+                chat_id,
+                client,
+            };
             let mut offset = 0;
             loop {
                 if let Ok(updates) = ch.get_updates(offset).await {
                     for update in updates {
                         if let Some(msg) = &update.message {
                             let from = msg.from.as_ref();
-                            let is_group = msg.chat.chat_type.as_deref()
+                            let is_group = msg
+                                .chat
+                                .chat_type
+                                .as_deref()
                                 .map(|t| t == "group" || t == "supergroup")
                                 .unwrap_or(false);
 
                             // Determine message content based on message type
                             let text = if let Some(loc) = &msg.location {
                                 // Location: format as coordinates with Google Maps link
-                                format!("📍 Location: {}, {} (https://maps.google.com/?q={},{})", 
-                                    loc.latitude, loc.longitude, loc.latitude, loc.longitude)
+                                format!(
+                                    "📍 Location: {}, {} (https://maps.google.com/?q={},{})",
+                                    loc.latitude, loc.longitude, loc.latitude, loc.longitude
+                                )
                             } else if let Some(_sticker) = &msg.sticker {
                                 // Sticker: just note it was received
                                 "🎨 Sticker received".to_string()
                             } else if let Some(voice) = &msg.voice {
                                 // Voice: transcribe with faster-whisper
-                                ch.transcribe_voice(&voice.file_id).await.unwrap_or_default()
+                                ch.transcribe_voice(&voice.file_id)
+                                    .await
+                                    .unwrap_or_default()
                             } else if let Some(audio) = &msg.audio {
                                 // Audio: transcribe with faster-whisper
-                                ch.transcribe_voice(&audio.file_id).await.unwrap_or_default()
+                                ch.transcribe_voice(&audio.file_id)
+                                    .await
+                                    .unwrap_or_default()
                             } else if let Some(text_content) = &msg.text {
                                 // Regular text
                                 text_content.clone()

@@ -8,7 +8,9 @@ use super::traits::*;
 pub struct WebFetchTool;
 
 impl WebFetchTool {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[derive(Deserialize)]
@@ -18,11 +20,15 @@ struct FetchArgs {
     max_chars: usize,
 }
 
-fn default_max_chars() -> usize { 50_000 }
+fn default_max_chars() -> usize {
+    50_000
+}
 
 #[async_trait]
 impl Tool for WebFetchTool {
-    fn name(&self) -> &str { "web_fetch" }
+    fn name(&self) -> &str {
+        "web_fetch"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -68,7 +74,11 @@ impl Tool for WebFetchTool {
         let cleaned = strip_html(&text);
 
         let truncated = if cleaned.len() > args.max_chars {
-            format!("{}...\n[truncated at {} chars]", &cleaned[..args.max_chars], args.max_chars)
+            format!(
+                "{}...\n[truncated at {} chars]",
+                &cleaned[..args.max_chars],
+                args.max_chars
+            )
         } else {
             cleaned
         };
@@ -92,27 +102,47 @@ fn strip_html(html: &str) -> String {
     while i < chars.len() {
         // Detect script/style blocks
         if i + 7 < lower_chars.len() {
-            let slice: String = lower_chars[i..i+7].iter().collect();
-            if slice == "<script" { in_script = true; }
-            if slice == "<style " || (i + 6 < lower_chars.len() && lower_chars[i..i+6].iter().collect::<String>() == "<style") {
+            let slice: String = lower_chars[i..i + 7].iter().collect();
+            if slice == "<script" {
+                in_script = true;
+            }
+            if slice == "<style "
+                || (i + 6 < lower_chars.len()
+                    && lower_chars[i..i + 6].iter().collect::<String>() == "<style")
+            {
                 in_style = true;
             }
         }
         if i + 8 < lower_chars.len() {
-            let slice: String = lower_chars[i..i+9.min(lower_chars.len())].iter().collect();
-            if slice.starts_with("</script") { in_script = false; }
+            let slice: String = lower_chars[i..i + 9.min(lower_chars.len())]
+                .iter()
+                .collect();
+            if slice.starts_with("</script") {
+                in_script = false;
+            }
         }
         if i + 7 < lower_chars.len() {
-            let slice: String = lower_chars[i..i+8.min(lower_chars.len())].iter().collect();
-            if slice.starts_with("</style") { in_style = false; }
+            let slice: String = lower_chars[i..i + 8.min(lower_chars.len())]
+                .iter()
+                .collect();
+            if slice.starts_with("</style") {
+                in_style = false;
+            }
         }
 
         if chars[i] == '<' {
             in_tag = true;
             // Add newline for block elements
             if i + 3 < chars.len() {
-                let tag: String = lower_chars[i+1..i+3.min(lower_chars.len())].iter().collect();
-                if tag.starts_with('p') || tag.starts_with('h') || tag.starts_with("br") || tag.starts_with("di") || tag.starts_with("li") {
+                let tag: String = lower_chars[i + 1..i + 3.min(lower_chars.len())]
+                    .iter()
+                    .collect();
+                if tag.starts_with('p')
+                    || tag.starts_with('h')
+                    || tag.starts_with("br")
+                    || tag.starts_with("di")
+                    || tag.starts_with("li")
+                {
                     result.push('\n');
                 }
             }
@@ -125,7 +155,8 @@ fn strip_html(html: &str) -> String {
     }
 
     // Decode common entities
-    result = result.replace("&amp;", "&")
+    result = result
+        .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")

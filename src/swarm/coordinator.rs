@@ -1,11 +1,11 @@
+use super::delegation::DelegationManager;
+use super::handoff::HandoffManager;
+use super::scheduler::ConcurrencyScheduler;
+use super::team::TeamManager;
+use super::{AgentCapability, AgentInfo, SwarmStorage, Task, TaskPriority, TaskStatus};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use super::{SwarmStorage, Task, TaskStatus, TaskPriority, AgentInfo, AgentCapability};
-use super::delegation::DelegationManager;
-use super::team::TeamManager;
-use super::handoff::HandoffManager;
-use super::scheduler::ConcurrencyScheduler;
 
 /// Swarm coordinator — central orchestrator for multi-agent operations.
 /// Owns delegation, team, handoff managers, and concurrency scheduler.
@@ -42,7 +42,12 @@ impl SwarmCoordinator {
     }
 
     /// Submit a task to the swarm
-    pub async fn submit_task(&self, title: String, description: String, priority: TaskPriority) -> Result<String> {
+    pub async fn submit_task(
+        &self,
+        title: String,
+        description: String,
+        priority: TaskPriority,
+    ) -> Result<String> {
         let task = Task::new(title, description, priority);
         let task_id = task.task_id.clone();
         self.storage.store_task(&task).await?;
@@ -58,7 +63,9 @@ impl SwarmCoordinator {
 
         let agents = self.storage.list_active_agents().await?;
         if let Some(agent) = agents.first() {
-            self.storage.update_task_status(task_id, TaskStatus::Running).await?;
+            self.storage
+                .update_task_status(task_id, TaskStatus::Running)
+                .await?;
             return Ok(Some(agent.agent_id.clone()));
         }
 

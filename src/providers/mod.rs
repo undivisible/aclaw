@@ -13,8 +13,8 @@ pub mod copilot;
 // OpenAI-compat covers: openai, openrouter, groq, together, mistral, deepseek,
 // fireworks, perplexity, xai, moonshot, venice, huggingface, siliconflow,
 // cerebras, minimax, vercel, cloudflare, and any custom endpoint
-pub mod openai_compat;
 #[cfg(feature = "provider-ollama")]
 pub mod ollama;
+pub mod openai_compat;
 
 pub use traits::{ChatMessage, ChatRequest, ChatResponse, Provider, ToolCall};

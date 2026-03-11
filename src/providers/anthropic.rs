@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::traits::*;
-use crate::tools::ToolSpec;
 use crate::cost::{CostTracker, TokenUsage};
+use crate::tools::ToolSpec;
 
 pub struct AnthropicProvider {
     api_key: String,
@@ -109,23 +109,28 @@ impl AnthropicProvider {
     }
 
     fn build_tools_payload(&self, tools: &[ToolSpec]) -> Vec<Value> {
-        tools.iter().map(|t| {
-            serde_json::json!({
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.parameters,
+        tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.parameters,
+                })
             })
-        }).collect()
+            .collect()
     }
 
     /// Extract usage from Anthropic API response and record cost
     async fn record_usage(&self, data: &Value, model: &str) {
         if let Some(tracker) = &self.cost_tracker {
             if let Some(usage_obj) = data.get("usage").and_then(|v| v.as_object()) {
-                let input_tokens = usage_obj.get("input_tokens")
+                let input_tokens = usage_obj
+                    .get("input_tokens")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
-                let output_tokens = usage_obj.get("output_tokens")
+                let output_tokens = usage_obj
+                    .get("output_tokens")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
 
@@ -145,7 +150,9 @@ impl AnthropicProvider {
 
 #[async_trait]
 impl Provider for AnthropicProvider {
-    fn name(&self) -> &str { "anthropic" }
+    fn name(&self) -> &str {
+        "anthropic"
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
@@ -156,7 +163,7 @@ impl Provider for AnthropicProvider {
         }
     }
 
-    async fn chat(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse> {
+    async fn chat(&self, request: &ChatRequest<'_>) -> anyhow::Result<ChatResponse> {
         // Create client with 120s socket timeout (LLM calls can be slow)
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
@@ -165,13 +172,15 @@ impl Provider for AnthropicProvider {
         // Split system message from conversation (combine multiple system msgs)
         // Use prompt caching for system prompts (cache_control breakpoint)
         let system: Option<Value> = {
-            let sys_parts: Vec<&str> = request.messages.iter()
+            let sys_parts: Vec<&str> = request
+                .messages
+                .iter()
                 .filter(|m| m.role == "system")
                 .map(|m| m.content.as_str())
                 .collect();
-            if sys_parts.is_empty() { 
-                None 
-            } else { 
+            if sys_parts.is_empty() {
+                None
+            } else {
                 // Wrap system prompt with cache_control for prompt caching
                 Some(serde_json::json!([{
                     "type": "text",
@@ -182,10 +191,10 @@ impl Provider for AnthropicProvider {
         };
 
         // Build Anthropic-format messages
-        let messages: Vec<Value> = self.build_anthropic_messages(&request.messages);
+        let messages: Vec<Value> = self.build_anthropic_messages(request.messages);
 
         let mut body = serde_json::json!({
-            "model": &request.model,
+            "model": request.model,
             "messages": messages,
             "max_tokens": request.max_tokens.unwrap_or(8192),
             "temperature": request.temperature,
@@ -195,7 +204,7 @@ impl Provider for AnthropicProvider {
             body["system"] = sys;
         }
 
-        if let Some(tools) = &request.tools {
+        if let Some(tools) = request.tools {
             if !tools.is_empty() {
                 body["tools"] = Value::Array(self.build_tools_payload(tools));
             }
@@ -219,25 +228,26 @@ impl Provider for AnthropicProvider {
                 .header("anthropic-beta", "prompt-caching-2024-07-31");
         }
 
-        let resp = req_builder
-            .json(&body)
-            .send()
-            .await?;
+        let resp = req_builder.json(&body).send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Anthropic API error {}: {}", status, &text[..text.len().min(200)]);
+            anyhow::bail!(
+                "Anthropic API error {}: {}",
+                status,
+                &text[..text.len().min(200)]
+            );
         }
 
         // Capture response headers for rate limit tracking
         let headers = resp.headers().clone();
-        
+
         let data: Value = resp.json().await?;
 
         // Record usage for cost tracking
-        self.record_usage(&data, &request.model).await;
-        
+        self.record_usage(&data, request.model).await;
+
         // Update rate limits from response headers
         if let Some(tracker) = &self.cost_tracker {
             tracker.update_rate_limits(&headers).await;
@@ -272,7 +282,11 @@ impl Provider for AnthropicProvider {
         });
 
         Ok(ChatResponse {
-            text: if text_parts.is_empty() { None } else { Some(text_parts.join("")) },
+            text: if text_parts.is_empty() {
+                None
+            } else {
+                Some(text_parts.join(""))
+            },
             tool_calls,
             usage,
         })

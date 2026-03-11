@@ -18,8 +18,14 @@ pub trait RuntimeAdapter: Send + Sync {
     fn storage_path(&self) -> PathBuf;
 
     /// Maximum memory budget in bytes (0 = unlimited)
-    fn memory_budget(&self) -> u64 { 0 }
+    fn memory_budget(&self) -> u64 {
+        0
+    }
 
     /// Build a shell command for this runtime
-    fn build_command(&self, command: &str, workspace: &Path) -> anyhow::Result<tokio::process::Command>;
+    fn build_command(
+        &self,
+        command: &str,
+        workspace: &Path,
+    ) -> anyhow::Result<tokio::process::Command>;
 }

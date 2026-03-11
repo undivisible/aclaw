@@ -22,7 +22,11 @@ impl FileReadTool {
     fn resolve_path(&self, path: &str) -> PathBuf {
         if path.starts_with('/') || path.starts_with('~') {
             let expanded = if path.starts_with('~') {
-                path.replacen('~', &std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()), 1)
+                path.replacen(
+                    '~',
+                    &std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()),
+                    1,
+                )
             } else {
                 path.to_string()
             };
@@ -45,12 +49,15 @@ struct ReadArgs {
 
 #[async_trait]
 impl Tool for FileReadTool {
-    fn name(&self) -> &str { "Read" }
+    fn name(&self) -> &str {
+        "Read"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "Read".to_string(),
-            description: "Read the contents of a file. Use offset/limit for large files.".to_string(),
+            description: "Read the contents of a file. Use offset/limit for large files."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -84,11 +91,7 @@ impl Tool for FileReadTool {
                 let offset = args.offset.unwrap_or(1).max(1) - 1; // Convert 1-indexed to 0-indexed
                 let limit = args.limit.unwrap_or(2000);
 
-                let selected: Vec<&str> = lines.iter()
-                    .skip(offset)
-                    .take(limit)
-                    .copied()
-                    .collect();
+                let selected: Vec<&str> = lines.iter().skip(offset).take(limit).copied().collect();
 
                 let result = selected.join("\n");
 
@@ -103,13 +106,18 @@ impl Tool for FileReadTool {
                 if remaining > 0 {
                     Ok(ToolResult::success(format!(
                         "{}\n\n[{} more lines in file. Use offset={} to continue.]",
-                        truncated, remaining, offset + limit + 1
+                        truncated,
+                        remaining,
+                        offset + limit + 1
                     )))
                 } else {
                     Ok(ToolResult::success(truncated))
                 }
             }
-            Err(e) => Ok(ToolResult::error(format!("Cannot read '{}': {}", args.path, e))),
+            Err(e) => Ok(ToolResult::error(format!(
+                "Cannot read '{}': {}",
+                args.path, e
+            ))),
         }
     }
 }
@@ -130,7 +138,11 @@ impl FileWriteTool {
     fn resolve_path(&self, path: &str) -> PathBuf {
         if path.starts_with('/') || path.starts_with('~') {
             let expanded = if path.starts_with('~') {
-                path.replacen('~', &std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()), 1)
+                path.replacen(
+                    '~',
+                    &std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()),
+                    1,
+                )
             } else {
                 path.to_string()
             };
@@ -150,7 +162,9 @@ struct WriteArgs {
 
 #[async_trait]
 impl Tool for FileWriteTool {
-    fn name(&self) -> &str { "Write" }
+    fn name(&self) -> &str {
+        "Write"
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {

@@ -35,12 +35,18 @@ impl ActiveCounts {
     }
 
     fn increment(&mut self, source: &str, target: &str) {
-        *self.per_link.entry((source.to_string(), target.to_string())).or_insert(0) += 1;
+        *self
+            .per_link
+            .entry((source.to_string(), target.to_string()))
+            .or_insert(0) += 1;
         *self.per_agent.entry(target.to_string()).or_insert(0) += 1;
     }
 
     fn decrement(&mut self, source: &str, target: &str) {
-        if let Some(c) = self.per_link.get_mut(&(source.to_string(), target.to_string())) {
+        if let Some(c) = self
+            .per_link
+            .get_mut(&(source.to_string(), target.to_string()))
+        {
             *c = c.saturating_sub(1);
         }
         if let Some(c) = self.per_agent.get_mut(target) {
@@ -49,7 +55,10 @@ impl ActiveCounts {
     }
 
     fn link_count(&self, source: &str, target: &str) -> u32 {
-        self.per_link.get(&(source.to_string(), target.to_string())).copied().unwrap_or(0)
+        self.per_link
+            .get(&(source.to_string(), target.to_string()))
+            .copied()
+            .unwrap_or(0)
     }
 
     fn agent_count(&self, agent: &str) -> u32 {
@@ -102,16 +111,29 @@ impl DelegationManager {
         context: Option<String>,
     ) -> Result<DelegationRecord> {
         // Resolve agent names to IDs
-        let source = self.storage.get_agent_by_name(source_name).await?
+        let source = self
+            .storage
+            .get_agent_by_name(source_name)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Source agent '{}' not found", source_name))?;
-        let target = self.storage.get_agent_by_name(target_name).await?
+        let target = self
+            .storage
+            .get_agent_by_name(target_name)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Target agent '{}' not found", target_name))?;
 
         // Check permission
-        let link = self.storage.check_link_permission(&source.agent_id, &target.agent_id).await?
-            .ok_or_else(|| anyhow::anyhow!(
-                "No delegation permission from '{}' to '{}'", source_name, target_name
-            ))?;
+        let link = self
+            .storage
+            .check_link_permission(&source.agent_id, &target.agent_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No delegation permission from '{}' to '{}'",
+                    source_name,
+                    target_name
+                )
+            })?;
 
         // Check per-link concurrency
         let counts = self.active_counts.read().await;
@@ -119,19 +141,27 @@ impl DelegationManager {
         if link_count >= link.max_concurrent {
             bail!(
                 "Per-link concurrency limit reached ({}/{}) for {} -> {}",
-                link_count, link.max_concurrent, source_name, target_name
+                link_count,
+                link.max_concurrent,
+                source_name,
+                target_name
             );
         }
 
         // Check per-agent concurrency
-        let agent = self.storage.get_agent(&target.agent_id).await?
+        let agent = self
+            .storage
+            .get_agent(&target.agent_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Target agent vanished"))?;
         let max_agent = agent.max_concurrent.unwrap_or(5) as u32;
         let agent_count = counts.agent_count(&target.agent_id);
         if agent_count >= max_agent {
             bail!(
                 "Per-agent concurrency limit reached ({}/{}) for '{}'",
-                agent_count, max_agent, target_name
+                agent_count,
+                max_agent,
+                target_name
             );
         }
         drop(counts);
@@ -159,10 +189,15 @@ impl DelegationManager {
 
     /// Complete a delegation
     pub async fn complete_delegation(&self, delegation_id: &str, result: String) -> Result<()> {
-        let record = self.storage.get_delegation(delegation_id).await?
+        let record = self
+            .storage
+            .get_delegation(delegation_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Delegation '{}' not found", delegation_id))?;
 
-        self.storage.update_delegation_status(delegation_id, "completed", Some(result)).await?;
+        self.storage
+            .update_delegation_status(delegation_id, "completed", Some(result))
+            .await?;
 
         let mut counts = self.active_counts.write().await;
         counts.decrement(&record.source_agent_id, &record.target_agent_id);
@@ -172,10 +207,15 @@ impl DelegationManager {
 
     /// Fail a delegation
     pub async fn fail_delegation(&self, delegation_id: &str, error: String) -> Result<()> {
-        let record = self.storage.get_delegation(delegation_id).await?
+        let record = self
+            .storage
+            .get_delegation(delegation_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Delegation '{}' not found", delegation_id))?;
 
-        self.storage.update_delegation_status(delegation_id, "failed", Some(error)).await?;
+        self.storage
+            .update_delegation_status(delegation_id, "failed", Some(error))
+            .await?;
 
         let mut counts = self.active_counts.write().await;
         counts.decrement(&record.source_agent_id, &record.target_agent_id);
@@ -185,10 +225,15 @@ impl DelegationManager {
 
     /// Cancel a delegation
     pub async fn cancel_delegation(&self, delegation_id: &str) -> Result<()> {
-        let record = self.storage.get_delegation(delegation_id).await?
+        let record = self
+            .storage
+            .get_delegation(delegation_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Delegation '{}' not found", delegation_id))?;
 
-        self.storage.update_delegation_status(delegation_id, "cancelled", None).await?;
+        self.storage
+            .update_delegation_status(delegation_id, "cancelled", None)
+            .await?;
 
         let mut counts = self.active_counts.write().await;
         counts.decrement(&record.source_agent_id, &record.target_agent_id);
@@ -213,7 +258,10 @@ impl DelegationManager {
         *counts = ActiveCounts::new();
 
         for agent in &agents {
-            let delegations = self.storage.list_active_delegations(&agent.agent_id).await?;
+            let delegations = self
+                .storage
+                .list_active_delegations(&agent.agent_id)
+                .await?;
             for d in delegations {
                 counts.increment(&d.source_agent_id, &d.target_agent_id);
             }

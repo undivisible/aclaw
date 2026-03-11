@@ -29,7 +29,9 @@ impl MatrixChannel {
 
 #[async_trait]
 impl Channel for MatrixChannel {
-    fn name(&self) -> &str { "matrix" }
+    fn name(&self) -> &str {
+        "matrix"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (tx, rx) = mpsc::channel(32);
@@ -62,14 +64,25 @@ impl Channel for MatrixChannel {
                             for (room_id, room) in rooms {
                                 if let Some(events) = room["timeline"]["events"].as_array() {
                                     for event in events {
-                                        if event["type"].as_str() != Some("m.room.message") { continue; }
+                                        if event["type"].as_str() != Some("m.room.message") {
+                                            continue;
+                                        }
                                         let content = &event["content"];
-                                        let text = content["body"].as_str().unwrap_or("").to_string();
-                                        if text.is_empty() { continue; }
+                                        let text =
+                                            content["body"].as_str().unwrap_or("").to_string();
+                                        if text.is_empty() {
+                                            continue;
+                                        }
 
                                         let incoming = IncomingMessage {
-                                            id: event["event_id"].as_str().unwrap_or("").to_string(),
-                                            sender_id: event["sender"].as_str().unwrap_or("").to_string(),
+                                            id: event["event_id"]
+                                                .as_str()
+                                                .unwrap_or("")
+                                                .to_string(),
+                                            sender_id: event["sender"]
+                                                .as_str()
+                                                .unwrap_or("")
+                                                .to_string(),
                                             sender_name: None,
                                             chat_id: room_id.clone(),
                                             text,

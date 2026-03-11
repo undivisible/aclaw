@@ -34,7 +34,9 @@ impl SlackChannel {
 
 #[async_trait]
 impl Channel for SlackChannel {
-    fn name(&self) -> &str { "slack" }
+    fn name(&self) -> &str {
+        "slack"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (tx, rx) = mpsc::channel(32);
@@ -60,17 +62,26 @@ impl Channel for SlackChannel {
                         if let Some(messages) = data["messages"].as_array() {
                             for msg in messages.iter().rev() {
                                 let ts = msg["ts"].as_str().unwrap_or("").to_string();
-                                if ts <= last_ts { continue; }
-                                if msg["bot_id"].is_string() { continue; }
+                                if ts <= last_ts {
+                                    continue;
+                                }
+                                if msg["bot_id"].is_string() {
+                                    continue;
+                                }
 
                                 let text = msg["text"].as_str().unwrap_or("").to_string();
-                                if text.is_empty() { continue; }
+                                if text.is_empty() {
+                                    continue;
+                                }
 
                                 last_ts = ts.clone();
 
                                 let incoming = IncomingMessage {
                                     id: ts,
-                                    sender_id: msg["user"].as_str().unwrap_or("unknown").to_string(),
+                                    sender_id: msg["user"]
+                                        .as_str()
+                                        .unwrap_or("unknown")
+                                        .to_string(),
                                     sender_name: None,
                                     chat_id: msg["channel"].as_str().unwrap_or("").to_string(),
                                     text,
@@ -79,7 +90,9 @@ impl Channel for SlackChannel {
                                     timestamp: chrono::Utc::now(),
                                 };
 
-                                if tx.send(incoming).await.is_err() { return; }
+                                if tx.send(incoming).await.is_err() {
+                                    return;
+                                }
                             }
                         }
                     }

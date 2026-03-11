@@ -76,9 +76,7 @@ impl OAuthTokenCache {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No access_token in refresh response"))?;
         let new_refresh = body["refresh_token"].as_str();
-        let expires_in = body["expires_in"]
-            .as_i64()
-            .unwrap_or(3600) * 1000; // Convert to ms
+        let expires_in = body["expires_in"].as_i64().unwrap_or(3600) * 1000; // Convert to ms
 
         let new_expires = chrono::Utc::now().timestamp_millis() + expires_in;
 
@@ -125,9 +123,12 @@ mod tests {
 
     #[test]
     fn test_oauth_cache() {
-        let cache =
-            OAuthTokenCache::new("token123".to_string(), None, chrono::Utc::now().timestamp_millis() + 3600 * 1000);
-        
+        let cache = OAuthTokenCache::new(
+            "token123".to_string(),
+            None,
+            chrono::Utc::now().timestamp_millis() + 3600 * 1000,
+        );
+
         // Should not panic
         assert!(!cache.token.blocking_read().is_none());
     }

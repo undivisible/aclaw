@@ -6,10 +6,10 @@
 //! - Delegate: delegated tasks from other agents
 //! - Cron: scheduled background tasks
 
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc};
 
 /// Execution lane types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -74,9 +74,27 @@ impl Default for ConcurrencyScheduler {
 impl ConcurrencyScheduler {
     pub fn new() -> Self {
         let mut configs = HashMap::new();
-        configs.insert(Lane::Main, LaneConfig { max_concurrent: 3, priority: 2 });
-        configs.insert(Lane::Delegate, LaneConfig { max_concurrent: 5, priority: 1 });
-        configs.insert(Lane::Cron, LaneConfig { max_concurrent: 2, priority: 0 });
+        configs.insert(
+            Lane::Main,
+            LaneConfig {
+                max_concurrent: 3,
+                priority: 2,
+            },
+        );
+        configs.insert(
+            Lane::Delegate,
+            LaneConfig {
+                max_concurrent: 5,
+                priority: 1,
+            },
+        );
+        configs.insert(
+            Lane::Cron,
+            LaneConfig {
+                max_concurrent: 2,
+                priority: 0,
+            },
+        );
 
         Self {
             lane_configs: configs,

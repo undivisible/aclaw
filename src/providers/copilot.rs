@@ -29,20 +29,21 @@ impl CopilotProvider {
     pub fn from_openclaw() -> anyhow::Result<Self> {
         let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("No home dir"))?;
         let token_path = home.join(".openclaw/credentials/github-copilot.token.json");
-        
+
         if !token_path.exists() {
             return Err(anyhow::anyhow!("No Copilot token at {:?}", token_path));
         }
-        
+
         let content = std::fs::read_to_string(&token_path)?;
         let data: Value = serde_json::from_str(&content)?;
-        
-        let token = data["token"].as_str()
+
+        let token = data["token"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("No token field"))?;
-        
+
         // Derive API base URL from token's proxy-ep field
         let base_url = derive_base_url(token);
-        
+
         Ok(Self {
             github_token: String::new(),
             api_token: Some(token.to_string()),
@@ -55,39 +56,38 @@ impl CopilotProvider {
         if let Some(ref token) = self.api_token {
             return Ok(token.clone());
         }
-        
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
-        
+
         let resp = client
             .get(COPILOT_TOKEN_URL)
             .header("Accept", "application/json")
             .header("Authorization", format!("Bearer {}", &self.github_token))
             .send()
             .await?;
-        
+
         if !resp.status().is_success() {
             anyhow::bail!("Copilot token exchange failed: {}", resp.status());
         }
-        
+
         let data: Value = resp.json().await?;
-        let token = data["token"].as_str()
+        let token = data["token"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("No token in response"))?
             .to_string();
-        
+
         self.base_url = derive_base_url(&token);
         self.api_token = Some(token.clone());
-        
+
         Ok(token)
     }
 }
 
 /// Derive API base URL from Copilot token's proxy-ep field
 fn derive_base_url(token: &str) -> String {
-    if let Some(caps) = token.split(';')
-        .find(|s| s.trim().starts_with("proxy-ep="))
-    {
+    if let Some(caps) = token.split(';').find(|s| s.trim().starts_with("proxy-ep=")) {
         let proxy_ep = caps.trim().trim_start_matches("proxy-ep=").trim();
         if !proxy_ep.is_empty() {
             let host = proxy_ep
@@ -102,7 +102,9 @@ fn derive_base_url(token: &str) -> String {
 
 #[async_trait]
 impl Provider for CopilotProvider {
-    fn name(&self) -> &str { "github-copilot" }
+    fn name(&self) -> &str {
+        "github-copilot"
+    }
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
@@ -113,41 +115,48 @@ impl Provider for CopilotProvider {
         }
     }
 
-    async fn chat(&self, request: &ChatRequest) -> anyhow::Result<ChatResponse> {
-        let token = self.api_token.as_ref()
+    async fn chat(&self, request: &ChatRequest<'_>) -> anyhow::Result<ChatResponse> {
+        let token = self
+            .api_token
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No Copilot token available"))?;
-        
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()?;
-        
-        let messages: Vec<Value> = request.messages.iter()
+
+        let messages: Vec<Value> = request
+            .messages
+            .iter()
             .map(|m| serde_json::json!({ "role": &m.role, "content": &m.content }))
             .collect();
-        
+
         let mut body = serde_json::json!({
-            "model": &request.model,
+            "model": request.model,
             "messages": messages,
             "max_tokens": request.max_tokens.unwrap_or(4096),
             "temperature": request.temperature,
         });
-        
-        if let Some(tools) = &request.tools {
+
+        if let Some(tools) = request.tools {
             if !tools.is_empty() {
-                let tools_payload: Vec<Value> = tools.iter().map(|t| {
-                    serde_json::json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        }
+                let tools_payload: Vec<Value> = tools
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.parameters,
+                            }
+                        })
                     })
-                }).collect();
+                    .collect();
                 body["tools"] = Value::Array(tools_payload);
             }
         }
-        
+
         let resp = client
             .post(format!("{}/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", token))
@@ -156,37 +165,51 @@ impl Provider for CopilotProvider {
             .json(&body)
             .send()
             .await?;
-        
+
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Copilot API error {}: {}", status, &text[..text.len().min(300)]);
+            anyhow::bail!(
+                "Copilot API error {}: {}",
+                status,
+                &text[..text.len().min(300)]
+            );
         }
-        
+
         let data: Value = resp.json().await?;
-        
+
         let choice = &data["choices"][0];
         let message = &choice["message"];
-        
+
         let text = message["content"].as_str().map(|s| s.to_string());
-        
+
         let mut tool_calls = Vec::new();
         if let Some(calls) = message["tool_calls"].as_array() {
             for call in calls {
                 tool_calls.push(ToolCall {
                     id: call["id"].as_str().unwrap_or("").to_string(),
                     name: call["function"]["name"].as_str().unwrap_or("").to_string(),
-                    arguments: call["function"]["arguments"].as_str().unwrap_or("{}").to_string(),
+                    arguments: call["function"]["arguments"]
+                        .as_str()
+                        .unwrap_or("{}")
+                        .to_string(),
                 });
             }
         }
-        
+
         let usage = data["usage"].as_object().map(|u| Usage {
             input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            output_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            output_tokens: u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32,
         });
-        
-        Ok(ChatResponse { text, tool_calls, usage })
+
+        Ok(ChatResponse {
+            text,
+            tool_calls,
+            usage,
+        })
     }
 }
 
@@ -197,7 +220,10 @@ mod tests {
     #[test]
     fn test_derive_base_url() {
         let token = "tid=abc;proxy-ep=proxy.individual.githubcopilot.com;exp=123";
-        assert_eq!(derive_base_url(token), "https://api.individual.githubcopilot.com");
+        assert_eq!(
+            derive_base_url(token),
+            "https://api.individual.githubcopilot.com"
+        );
     }
 
     #[test]
