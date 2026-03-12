@@ -275,11 +275,38 @@ impl Gateway {
                 .to_string(),
             ))
             .await;
-        while let Some(message) = socket.next().await {
-            match message {
-                Ok(axum::extract::ws::Message::Close(_)) => break,
-                Ok(_) => {}
-                Err(_) => break,
+        let mut event_rx = gateway
+            .hosted_runtime
+            .as_ref()
+            .map(|runtime| runtime.subscribe_events());
+        loop {
+            tokio::select! {
+                incoming = socket.next() => {
+                    match incoming {
+                        Some(Ok(axum::extract::ws::Message::Close(_))) | None => break,
+                        Some(Err(_)) => break,
+                        _ => {}
+                    }
+                }
+                event = async {
+                    match &mut event_rx {
+                        Some(rx) => rx.recv().await.ok(),
+                        None => None,
+                    }
+                } => {
+                    if let Some(event) = event {
+                        if event.session_id == agent_id {
+                            let _ = socket.send(
+                                axum::extract::ws::Message::Text(
+                                    serde_json::json!({
+                                        "type": "session_event",
+                                        "payload": event,
+                                    }).to_string()
+                                )
+                            ).await;
+                        }
+                    }
+                }
             }
         }
     }

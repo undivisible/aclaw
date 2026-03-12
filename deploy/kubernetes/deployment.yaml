@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unthinkclaw
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: unthinkclaw
+  template:
+    metadata:
+      labels:
+        app: unthinkclaw
+    spec:
+      containers:
+        - name: unthinkclaw
+          image: ghcr.io/undivisible/unthinkclaw:latest
+          args: ["gateway", "--config", "/app/unthinkclaw.json"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: UNTHINKCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: unthinkclaw-secrets
+                  key: gateway-token
+            - name: RUST_LOG
+              value: info
+          volumeMounts:
+            - name: config
+              mountPath: /app/unthinkclaw.json
+              subPath: unthinkclaw.json
+            - name: state
+              mountPath: /app/.unthinkclaw
+      volumes:
+        - name: config
+          configMap:
+            name: unthinkclaw-config
+        - name: state
+          emptyDir: {}

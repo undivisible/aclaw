@@ -331,7 +331,7 @@ impl AgentRunner {
         tracing::info!("Initial state: {:?}", state);
 
         // Step 2: If planning, ask Haiku to make a plan + choose execution model
-        let mut plan: Option<String> = None;
+        let mut _plan: Option<String> = None;
         let mut execution_model = main_model.clone(); // Default to configured model (sonnet)
 
         if state == AgentState::Planning {
@@ -411,7 +411,7 @@ impl AgentRunner {
                         "EXECUTION PLAN (follow these steps):\n{}",
                         p
                     )));
-                    plan = Some(p);
+                    _plan = Some(p);
                     state = AgentState::Executing;
                 }
                 Err(e) => {

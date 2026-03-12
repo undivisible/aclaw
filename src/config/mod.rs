@@ -13,6 +13,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub runtime: RuntimeConfig,
     pub hosting: HostingConfig,
+    pub observability: ObservabilityConfig,
     pub channel: ChannelConfig,
     pub gateway: GatewayConfig,
     pub policy: PolicyConfig,
@@ -49,6 +50,15 @@ pub struct HostingConfig {
     pub tenant_root: PathBuf,
     pub session_timeout_minutes: u64,
     pub default_channel: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObservabilityConfig {
+    pub service_name: String,
+    pub environment: String,
+    pub json_logs: bool,
+    pub trace_header_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +115,7 @@ impl Config {
                 state_path: None,
             },
             hosting: HostingConfig::default(),
+            observability: ObservabilityConfig::default(),
             channel: ChannelConfig {
                 kind: "cli".to_string(),
                 token: None,
@@ -158,6 +169,17 @@ impl Default for HostingConfig {
             tenant_root: PathBuf::from(".unthinkclaw/tenants"),
             session_timeout_minutes: 120,
             default_channel: "gateway".to_string(),
+        }
+    }
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            service_name: "unthinkclaw".to_string(),
+            environment: "development".to_string(),
+            json_logs: false,
+            trace_header_name: "traceparent".to_string(),
         }
     }
 }

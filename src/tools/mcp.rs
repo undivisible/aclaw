@@ -7,23 +7,12 @@ use super::traits::*;
 use crate::mcp::CodexClient;
 
 pub struct McpTool {
-    client: Option<CodexClient>,
+    _client: Option<CodexClient>,
 }
 
 impl McpTool {
     pub fn new() -> Self {
-        Self { client: None }
-    }
-
-    async fn ensure_client(&mut self) -> anyhow::Result<&CodexClient> {
-        if self.client.is_none() {
-            let client = CodexClient::spawn().await?;
-            self.client = Some(client);
-        }
-
-        self.client
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Failed to initialize Codex client"))
+        Self { _client: None }
     }
 }
 

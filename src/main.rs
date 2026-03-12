@@ -337,11 +337,12 @@ enum SwarmAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
+    let tracing_cfg = config_path_for_cli(&cli)
+        .and_then(|path| Config::load(&path).ok())
+        .map(|cfg| cfg.observability)
+        .unwrap_or_default();
+    init_tracing(&tracing_cfg)?;
 
     match cli.command {
         Commands::Chat {
@@ -1167,6 +1168,37 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn config_path_for_cli(cli: &Cli) -> Option<String> {
+    match &cli.command {
+        Commands::Chat { config, .. }
+        | Commands::Ask { config, .. }
+        | Commands::Gateway { config, .. }
+        | Commands::Doctor { config, .. }
+        | Commands::Audit { config, .. } => Some(config.clone()),
+        _ => None,
+    }
+}
+
+fn init_tracing(cfg: &unthinkclaw::config::ObservabilityConfig) -> anyhow::Result<()> {
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env();
+    let fmt = tracing_subscriber::fmt().with_env_filter(env_filter);
+    if cfg.json_logs {
+        fmt.json()
+            .try_init()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    } else {
+        fmt.try_init()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    }
+    tracing::info!(
+        service_name = %cfg.service_name,
+        environment = %cfg.environment,
+        trace_header = %cfg.trace_header_name,
+        "tracing initialized"
+    );
     Ok(())
 }
 

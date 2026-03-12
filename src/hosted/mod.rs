@@ -11,9 +11,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use surrealdb::engine::local::RocksDb;
 use surrealdb::Surreal;
+use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 
-use crate::agent::AgentRunner;
+use crate::agent::{AgentRunner, ProgressUpdate};
 use crate::channels::IncomingMessage;
 use crate::config::Config;
 use crate::memory::{
@@ -99,6 +100,15 @@ pub struct RuntimeInstanceStatus {
     pub cost_total_usd: f64,
     pub total_tokens: usize,
     pub call_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEvent {
+    pub session_id: String,
+    pub tenant_id: String,
+    pub event: String,
+    pub detail: serde_json::Value,
+    pub emitted_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -226,6 +236,7 @@ pub struct HostedRuntime {
     plugins: Arc<PluginRegistry>,
     metrics: Arc<RwLock<RuntimeMetrics>>,
     tenant_metrics: Arc<RwLock<HashMap<String, TenantMetrics>>>,
+    events: broadcast::Sender<SessionEvent>,
 }
 
 impl HostedRuntime {
@@ -255,6 +266,7 @@ impl HostedRuntime {
         plugins.register(Arc::new(ToolsPlugin::new(policy.clone())));
         plugins.register(Arc::new(VibemaniaPlugin));
         plugins.register(Arc::new(GitPlugin::new(policy.clone())));
+        let (events, _rx) = broadcast::channel(256);
 
         Ok(Self {
             config,
@@ -270,6 +282,7 @@ impl HostedRuntime {
             plugins: Arc::new(plugins),
             metrics: Arc::new(RwLock::new(RuntimeMetrics::default())),
             tenant_metrics: Arc::new(RwLock::new(HashMap::new())),
+            events,
         })
     }
 
@@ -315,9 +328,53 @@ impl HostedRuntime {
                 resolved_agent,
             )
             .await?;
+        self.emit_event(
+            &lease,
+            "chat_started",
+            serde_json::json!({
+                "channel": resolved_channel,
+                "agent_key": resolved_agent,
+            }),
+        );
 
         let started_at = std::time::Instant::now();
         let runner = self.get_or_create_runner(&lease).await?;
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(32);
+        let lease_for_progress = lease.clone();
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            while let Some(update) = progress_rx.recv().await {
+                let (event, detail) = match update {
+                    ProgressUpdate::Thinking => (
+                        "agent_thinking",
+                        serde_json::json!({
+                            "state": "thinking",
+                        }),
+                    ),
+                    ProgressUpdate::ToolCall { name, round } => (
+                        "agent_tool_call",
+                        serde_json::json!({
+                            "tool_name": name,
+                            "round": round,
+                        }),
+                    ),
+                    ProgressUpdate::Processing { round, tool_count } => (
+                        "agent_processing",
+                        serde_json::json!({
+                            "round": round,
+                            "tool_count": tool_count,
+                        }),
+                    ),
+                };
+                let _ = events.send(SessionEvent {
+                    session_id: lease_for_progress.session.session_id.clone(),
+                    tenant_id: lease_for_progress.tenant.tenant_id.clone(),
+                    event: event.to_string(),
+                    detail,
+                    emitted_at: Utc::now(),
+                });
+            }
+        });
         let outcome = runner
             .handle_message_pub(
                 &IncomingMessage {
@@ -330,8 +387,14 @@ impl HostedRuntime {
                     reply_to: None,
                     timestamp: Utc::now(),
                 },
-                None,
+                Some(&progress_tx),
             )
+            .await;
+        let _ = progress_tx
+            .send(ProgressUpdate::Processing {
+                round: 0,
+                tool_count: 0,
+            })
             .await;
         let latency_ms = started_at.elapsed().as_millis() as u64;
         self.control.touch_session(&resolved_session).await?;
@@ -340,11 +403,27 @@ impl HostedRuntime {
             Ok(response) => {
                 self.record_chat_metrics(&lease.tenant.tenant_id, latency_ms, false)
                     .await;
+                self.emit_event(
+                    &lease,
+                    "chat_completed",
+                    serde_json::json!({
+                        "latency_ms": latency_ms,
+                        "response_chars": response.len(),
+                    }),
+                );
                 Ok((response, lease))
             }
             Err(error) => {
                 self.record_chat_metrics(&lease.tenant.tenant_id, latency_ms, true)
                     .await;
+                self.emit_event(
+                    &lease,
+                    "chat_failed",
+                    serde_json::json!({
+                        "latency_ms": latency_ms,
+                        "error": error.to_string(),
+                    }),
+                );
                 Err(error)
             }
         }
@@ -506,6 +585,10 @@ impl HostedRuntime {
         metrics.rate_limited += 1;
     }
 
+    pub fn subscribe_events(&self) -> broadcast::Receiver<SessionEvent> {
+        self.events.subscribe()
+    }
+
     async fn record_chat_metrics(&self, tenant_id: &str, latency_ms: u64, is_error: bool) {
         {
             let mut metrics = self.metrics.write().await;
@@ -573,6 +656,16 @@ impl HostedRuntime {
             .join(sanitize_key(channel))
             .join(sanitize_key(user_id))
             .join("workspace")
+    }
+
+    fn emit_event(&self, lease: &SessionLease, event: &str, detail: serde_json::Value) {
+        let _ = self.events.send(SessionEvent {
+            session_id: lease.session.session_id.clone(),
+            tenant_id: lease.tenant.tenant_id.clone(),
+            event: event.to_string(),
+            detail,
+            emitted_at: Utc::now(),
+        });
     }
 }
 

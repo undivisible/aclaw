@@ -7,7 +7,7 @@ use std::sync::Arc;
 use unthinkclaw::swarm::models::*;
 use unthinkclaw::swarm::scheduler::{ConcurrencyScheduler, Lane};
 use unthinkclaw::swarm::{
-    AgentCapability, AgentInfo, SurrealBackend, SwarmCoordinator, SwarmStorage, TaskPriority,
+    AgentCapability, SurrealBackend, SwarmCoordinator, SwarmStorage, TaskPriority,
 };
 
 async fn setup_storage() -> Arc<dyn SwarmStorage> {
@@ -41,7 +41,7 @@ async fn test_register_and_list_agents() {
         .await
         .unwrap();
 
-    let id2 = coordinator
+    let _id2 = coordinator
         .register_agent(
             "researcher".to_string(),
             vec![AgentCapability::Research],

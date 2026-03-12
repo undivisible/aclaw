@@ -27,6 +27,7 @@ struct MessageArgs {
     /// Message ID (for edit/delete/react)
     message_id: Option<i64>,
     /// Emoji (for react)
+    #[allow(dead_code)]
     emoji: Option<String>,
 }
 

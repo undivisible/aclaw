@@ -84,7 +84,7 @@ anyhow = "1"
 
 # Logging (lightweight)
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
 # UUID + Time
 uuid = { version = "1", features = ["v4", "serde"] }

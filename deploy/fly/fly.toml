@@ -1,0 +1,20 @@
+app = "unthinkclaw"
+primary_region = "nrt"
+
+[build]
+  image = "ghcr.io/undivisible/unthinkclaw:latest"
+
+[env]
+  RUST_LOG = "info"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_start_machines = true
+  auto_stop_machines = "stop"
+  min_machines_running = 1
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
