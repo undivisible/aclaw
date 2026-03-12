@@ -168,7 +168,18 @@ impl Gateway {
             return StatusCode::TOO_MANY_REQUESTS.into_response();
         }
 
-        next.run(request).await
+        let trace_id = headers
+            .get("traceparent")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        tracing::info!(trace_id = %trace_id, "gateway ingress accepted");
+
+        let mut response = next.run(request).await;
+        if let Ok(value) = header::HeaderValue::from_str(&trace_id) {
+            response.headers_mut().insert("x-trace-id", value);
+        }
+        response
     }
 
     async fn consume_rate_limit(&self, key: String) -> bool {
@@ -214,8 +225,11 @@ impl Gateway {
         gateway.handle_chat_request(Some(agent_id), json).await
     }
 
-    async fn handle_websocket(ws: WebSocketUpgrade) -> impl IntoResponse {
-        ws.on_upgrade(Self::websocket_handler)
+    async fn handle_websocket(
+        State(gateway): State<Gateway>,
+        ws: WebSocketUpgrade,
+    ) -> impl IntoResponse {
+        ws.on_upgrade(|socket| Self::websocket_handler(gateway, socket))
     }
 
     async fn handle_websocket_agent(
@@ -226,7 +240,7 @@ impl Gateway {
         ws.on_upgrade(|socket| Self::websocket_handler_agent(gateway, agent_id, socket))
     }
 
-    async fn websocket_handler(mut socket: WebSocket) {
+    async fn websocket_handler(gateway: Gateway, mut socket: WebSocket) {
         let _ = socket
             .send(axum::extract::ws::Message::Text(
                 serde_json::json!({
@@ -239,15 +253,59 @@ impl Gateway {
         while let Some(message) = socket.next().await {
             match message {
                 Ok(axum::extract::ws::Message::Text(text)) => {
-                    let _ = socket
-                        .send(axum::extract::ws::Message::Text(
-                            serde_json::json!({
-                                "type": "echo",
-                                "text": text,
-                            })
-                            .to_string(),
-                        ))
-                        .await;
+                    let parsed = serde_json::from_str::<ChatRequest>(&text);
+                    match parsed {
+                        Ok(request) => {
+                            let response = gateway.handle_chat_request(None, request).await;
+                            let (_, Json(body)) = response;
+                            let response_id = body.id.clone();
+                            let _ = socket
+                                .send(axum::extract::ws::Message::Text(
+                                    serde_json::json!({
+                                        "type": "chat_started",
+                                        "id": response_id,
+                                    })
+                                    .to_string(),
+                                ))
+                                .await;
+                            for (index, chunk) in
+                                chunk_response(&body.text, 512).into_iter().enumerate()
+                            {
+                                let _ = socket
+                                    .send(axum::extract::ws::Message::Text(
+                                        serde_json::json!({
+                                            "type": "response_chunk",
+                                            "id": response_id,
+                                            "index": index,
+                                            "chunk": chunk,
+                                        })
+                                        .to_string(),
+                                    ))
+                                    .await;
+                            }
+                            let _ = socket
+                                .send(axum::extract::ws::Message::Text(
+                                    serde_json::json!({
+                                        "type": "chat_completed",
+                                        "id": response_id,
+                                        "metadata": body.metadata,
+                                    })
+                                    .to_string(),
+                                ))
+                                .await;
+                        }
+                        Err(_) => {
+                            let _ = socket
+                                .send(axum::extract::ws::Message::Text(
+                                    serde_json::json!({
+                                        "type": "echo",
+                                        "text": text,
+                                    })
+                                    .to_string(),
+                                ))
+                                .await;
+                        }
+                    }
                 }
                 Ok(axum::extract::ws::Message::Close(_)) => break,
                 Ok(_) => {}
@@ -922,6 +980,25 @@ fn client_identity(config: &GatewayConfig, headers: &HeaderMap, token: &str) -> 
         return format!("{}:{}", token, origin.trim());
     }
     token.to_string()
+}
+
+fn chunk_response(text: &str, chunk_size: usize) -> Vec<String> {
+    if text.is_empty() || chunk_size == 0 {
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        current.push(ch);
+        if current.len() >= chunk_size {
+            chunks.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
 }
 
 pub async fn start_gateway(

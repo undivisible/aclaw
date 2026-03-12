@@ -26,6 +26,8 @@ spec:
                   key: gateway-token
             - name: RUST_LOG
               value: info
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.default.svc.cluster.local:4317
           volumeMounts:
             - name: config
               mountPath: /app/unthinkclaw.json
