@@ -168,6 +168,21 @@ enum Commands {
         workspace: Option<PathBuf>,
     },
 
+    /// Send a message to the running unthinkclaw bot via Telegram
+    #[command(alias = "msg")]
+    Message {
+        /// Message text
+        message: String,
+
+        /// Chat ID (defaults to UNTHINKCLAW_CHAT_ID from .env)
+        #[arg(long)]
+        chat_id: Option<String>,
+
+        /// Workspace directory (to find .env)
+        #[arg(short, long)]
+        workspace: Option<PathBuf>,
+    },
+
     /// Manage cron jobs
     Cron {
         #[command(subcommand)]
@@ -982,6 +997,44 @@ async fn main() -> anyhow::Result<()> {
                     .args(["--user", "enable", "--now", "unthinkclaw"])
                     .status();
                 println!("  🐾 unthinkclaw is running!");
+            }
+        }
+
+        Commands::Message { message, chat_id, workspace } => {
+            let ws = workspace.unwrap_or_else(|| PathBuf::from("."));
+            let env_path = ws.join(".env");
+
+            // Load .env
+            if env_path.exists() {
+                let env_content = std::fs::read_to_string(&env_path)?;
+                for line in env_content.lines() {
+                    if let Some((k, v)) = line.split_once('=') {
+                        let v = v.trim().trim_matches('"');
+                        std::env::set_var(k.trim(), v);
+                    }
+                }
+            }
+
+            let token = std::env::var("UNTHINKCLAW_TELEGRAM_TOKEN")
+                .map_err(|_| anyhow::anyhow!("UNTHINKCLAW_TELEGRAM_TOKEN not set. Run from workspace dir or pass --workspace"))?;
+            let chat_id = chat_id
+                .or_else(|| std::env::var("UNTHINKCLAW_CHAT_ID").ok())
+                .ok_or_else(|| anyhow::anyhow!("Chat ID not set. Use --chat-id or set UNTHINKCLAW_CHAT_ID"))?;
+
+            let client = reqwest::Client::new();
+            let resp = client.post(format!("https://api.telegram.org/bot{}/sendMessage", token))
+                .json(&serde_json::json!({
+                    "chat_id": chat_id,
+                    "text": message,
+                }))
+                .send()
+                .await?;
+
+            let body: serde_json::Value = resp.json().await?;
+            if body["ok"].as_bool() == Some(true) {
+                println!("✅ Sent to chat {}", chat_id);
+            } else {
+                eprintln!("❌ {}", body);
             }
         }
 
