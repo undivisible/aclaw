@@ -8,7 +8,6 @@
 //! - `MemoryBackend` — Persistent state (SQLite, vector embeddings, file-based)
 //! - `RuntimeAdapter` — Execution (Native, Docker, WASM planned)
 //!
-//! Gateway — HTTP/WebSocket for remote management
 //! Embeddings — Vector search for semantic memory
 //! Swarms — Manager/Worker pattern for parallel execution
 //! Plugins — JSON-RPC 2.0 extensibility
@@ -23,9 +22,7 @@ pub mod cost;
 pub mod cron_scheduler;
 pub mod diagnostics;
 pub mod embeddings;
-pub mod gateway;
 pub mod heartbeat;
-pub mod hosted;
 pub mod mcp;
 pub mod memory;
 pub mod plugin;

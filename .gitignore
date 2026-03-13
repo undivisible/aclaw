@@ -4,6 +4,4 @@
 *.db-shm
 *.db-wal
 .env
-web/.next/
-web/node_modules/
 .DS_Store

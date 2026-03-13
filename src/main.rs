@@ -17,9 +17,7 @@ use unthinkclaw::channels::Channel as _;
 use unthinkclaw::config::Config;
 use unthinkclaw::cron_scheduler::CronScheduler;
 use unthinkclaw::diagnostics::{collect_doctor_report, render_doctor_report, render_findings};
-use unthinkclaw::gateway;
 use unthinkclaw::heartbeat::{self, HeartbeatConfig};
-use unthinkclaw::hosted::{default_state_path, HostedRuntime};
 use unthinkclaw::memory::search::{MemoryGetTool, MemorySearchTool};
 use unthinkclaw::memory::sqlite::SqliteMemory;
 use unthinkclaw::memory::MemoryBackend;
@@ -96,17 +94,6 @@ enum Commands {
         /// Override the model
         #[arg(short, long)]
         model: Option<String>,
-    },
-
-    /// Start HTTP/WebSocket gateway
-    Gateway {
-        /// Listen address
-        #[arg(short, long, default_value = "0.0.0.0:8080")]
-        addr: String,
-
-        /// Configuration file path
-        #[arg(short, long, default_value = "unthinkclaw.json")]
-        config: String,
     },
 
     /// Run system diagnostics and config validation
@@ -743,53 +730,6 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", response);
         }
 
-        Commands::Gateway { addr, config } => {
-            let cfg = load_config(&config);
-            let addr = if addr == "0.0.0.0:8080" {
-                cfg.gateway.bind.clone()
-            } else {
-                addr
-            };
-            let workspace = cfg.workspace.clone();
-            let auth_token = cfg
-                .gateway
-                .auth_token
-                .clone()
-                .or_else(|| std::env::var("UNTHINKCLAW_GATEWAY_TOKEN").ok())
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let provider = build_provider(&cfg);
-            let policy = Arc::new(ExecutionPolicy::from_config(&cfg.policy));
-            let memory = build_memory_backend(&workspace, &cfg).await?;
-            let system_prompt = prompt::build_system_prompt(&workspace).await;
-            let discovered_skills = skills::discover_skills();
-            let state_path = default_state_path(&workspace, cfg.runtime.state_path.as_ref());
-            let hosted_runtime = Arc::new(
-                HostedRuntime::new(
-                    cfg.clone(),
-                    workspace,
-                    provider,
-                    memory,
-                    policy,
-                    system_prompt,
-                    discovered_skills,
-                    state_path,
-                )
-                .await?,
-            );
-            println!("unthinkclaw Gateway — starting on {}", addr);
-            println!("   API: http://{}/api/chat", addr);
-            println!("   WebSocket: ws://{}/ws", addr);
-            println!("   Bearer token: {}", auth_token);
-            println!("   Admin API enabled: {}", cfg.gateway.enable_admin_api);
-            gateway::start_gateway_with_runtime(
-                &addr,
-                cfg.gateway.clone(),
-                &auth_token,
-                hosted_runtime,
-            )
-            .await?;
-        }
-
         Commands::Doctor {
             config,
             verbose,
@@ -817,7 +757,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => {
             println!("unthinkclaw v{}", env!("CARGO_PKG_VERSION"));
             println!("Status: OK");
-            println!("Commands: chat, ask, gateway, doctor, audit, status, init, cron");
+            println!("Commands: chat, ask, doctor, audit, status, init, cron, swarm");
         }
 
         Commands::Init { provider, api_key } => {
@@ -902,7 +842,7 @@ async fn main() -> anyhow::Result<()> {
                 };
 
                 let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
-                let surreal_path = default_state_path(&workspace, None);
+                let surreal_path = default_local_state_path(&workspace);
 
                 // Ensure directory exists
                 if let Some(parent) = surreal_path.parent() {
@@ -1175,11 +1115,14 @@ fn config_path_for_cli(cli: &Cli) -> Option<String> {
     match &cli.command {
         Commands::Chat { config, .. }
         | Commands::Ask { config, .. }
-        | Commands::Gateway { config, .. }
         | Commands::Doctor { config, .. }
         | Commands::Audit { config, .. } => Some(config.clone()),
         _ => None,
     }
+}
+
+fn default_local_state_path(workspace: &PathBuf) -> PathBuf {
+    workspace.join(".unthinkclaw/state.surreal")
 }
 
 fn init_tracing(cfg: &unthinkclaw::config::ObservabilityConfig) -> anyhow::Result<()> {

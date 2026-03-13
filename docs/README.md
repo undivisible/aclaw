@@ -2,8 +2,5 @@
 
 Operational and planning markdown lives here instead of the repo root.
 
-Contents:
-- `CLAW-ADOPTION-TODO.md`
-- `SWARM-UPGRADE.md`
-- `SWARM.md`
-- `schedule.md`
+This branch keeps the root limited to product-facing docs and agent
+instructions. Longer planning notes and migration docs belong in `docs/`.
