@@ -32,6 +32,7 @@ pub mod providers;
 pub mod runtime;
 pub mod scheduler;
 pub mod skills;
+#[cfg(feature = "swarm")]
 pub mod swarm;
 pub mod tools;
 

@@ -11,7 +11,7 @@ name = "unthinkclaw"
 path = "src/main.rs"
 
 [features]
-default = ["core", "channel-cli", "channel-telegram", "provider-anthropic", "swarm"]
+default = ["core", "channel-cli", "channel-telegram", "provider-anthropic"]
 
 # Core (always needed)
 core = []
@@ -54,7 +54,7 @@ provider-cloudflare = []
 docker = ["dep:bollard"]
 
 # Swarm mode (distributed agent coordination)
-swarm = []
+swarm = ["dep:surrealdb", "dep:rocksdb"]
 
 # Bundles
 all-channels = ["channel-cli", "channel-telegram", "channel-discord", "channel-slack", "channel-whatsapp", "channel-signal", "channel-matrix", "channel-irc", "channel-googlechat", "channel-msteams"]
@@ -94,8 +94,8 @@ chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.30", features = ["bundled"] }
 
 # Embedded SurrealDB + RocksDB (primary memory backend)
-surrealdb = { version = "2", features = ["kv-rocksdb"] }
-rocksdb = "0.22"
+surrealdb = { version = "2", features = ["kv-rocksdb"], optional = true }
+rocksdb = { version = "0.22", optional = true }
 
 # Container management (optional — only if you need Docker isolation)
 bollard = { version = "0.18", optional = true }
