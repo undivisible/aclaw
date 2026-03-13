@@ -125,7 +125,7 @@ enum Commands {
     /// Show runtime status
     Status,
 
-    /// Initialize configuration
+    /// Initialize configuration (interactive wizard or one-command setup)
     Init {
         /// Provider name (anthropic, openai, openrouter, ollama)
         #[arg(short, long, default_value = "anthropic")]
@@ -134,6 +134,38 @@ enum Commands {
         /// API key
         #[arg(short = 'k', long)]
         api_key: Option<String>,
+
+        /// Channel (telegram, discord, cli)
+        #[arg(long)]
+        channel: Option<String>,
+
+        /// Telegram bot token
+        #[arg(long)]
+        telegram_token: Option<String>,
+
+        /// Telegram chat ID
+        #[arg(long)]
+        telegram_chat_id: Option<String>,
+
+        /// Discord bot token
+        #[arg(long)]
+        discord_token: Option<String>,
+
+        /// Discord channel ID
+        #[arg(long)]
+        discord_channel_id: Option<String>,
+
+        /// Model to use
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Start the bot after init
+        #[arg(long, default_value_t = false)]
+        start: bool,
+
+        /// Workspace directory
+        #[arg(short, long)]
+        workspace: Option<PathBuf>,
     },
 
     /// Manage cron jobs
@@ -760,13 +792,197 @@ async fn main() -> anyhow::Result<()> {
             println!("Commands: chat, ask, doctor, audit, status, init, cron, swarm");
         }
 
-        Commands::Init { provider, api_key } => {
+        Commands::Init { provider, api_key, channel, telegram_token, telegram_chat_id, discord_token, discord_channel_id, model, start, workspace } => {
+            let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
+            println!("🐾 unthinkclaw setup\n");
+
+            // === Resolve values (flags or interactive prompts) ===
+            let api_key = match api_key {
+                Some(k) => k,
+                None => {
+                    eprint!("  API key ({}): ", provider);
+                    let mut buf = String::new();
+                    std::io::stdin().read_line(&mut buf)?;
+                    let k = buf.trim().to_string();
+                    if k.is_empty() { anyhow::bail!("API key required"); }
+                    k
+                }
+            };
+
+            let channel = match channel {
+                Some(c) => c,
+                None => {
+                    eprint!("  Channel (telegram/discord/cli) [telegram]: ");
+                    let mut buf = String::new();
+                    std::io::stdin().read_line(&mut buf)?;
+                    let c = buf.trim().to_string();
+                    if c.is_empty() { "telegram".to_string() } else { c }
+                }
+            };
+
+            let model = model.unwrap_or_else(|| {
+                if api_key.contains("sk-ant-oat") {
+                    "claude-sonnet-4-5".to_string()
+                } else {
+                    "claude-sonnet-4-5".to_string()
+                }
+            });
+
+            // Channel-specific tokens
+            let tg_token = if channel == "telegram" {
+                match telegram_token {
+                    Some(t) => Some(t),
+                    None => {
+                        eprint!("  Telegram bot token: ");
+                        let mut buf = String::new();
+                        std::io::stdin().read_line(&mut buf)?;
+                        let t = buf.trim().to_string();
+                        if t.is_empty() { None } else { Some(t) }
+                    }
+                }
+            } else { telegram_token };
+
+            let tg_chat_id = if channel == "telegram" {
+                match telegram_chat_id {
+                    Some(c) => Some(c),
+                    None => {
+                        eprint!("  Telegram chat ID: ");
+                        let mut buf = String::new();
+                        std::io::stdin().read_line(&mut buf)?;
+                        let c = buf.trim().to_string();
+                        if c.is_empty() { None } else { Some(c) }
+                    }
+                }
+            } else { telegram_chat_id };
+
+            let dc_token = if channel == "discord" { discord_token } else { None };
+            let dc_channel = if channel == "discord" { discord_channel_id } else { None };
+
+            // === Validate ===
+            print!("\n  Validating API key... ");
+            let client = reqwest::Client::new();
+            let is_oauth = api_key.contains("sk-ant-oat");
+            let auth_resp = if is_oauth {
+                client.get("https://api.anthropic.com/v1/models")
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .header("anthropic-version", "2023-06-01")
+                    .send().await
+            } else {
+                client.get("https://api.anthropic.com/v1/models")
+                    .header("x-api-key", &api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .send().await
+            };
+            match auth_resp {
+                Ok(r) if r.status().is_success() => println!("✅"),
+                Ok(r) => println!("⚠️  HTTP {} (may still work)", r.status()),
+                Err(e) => println!("❌ {}", e),
+            }
+
+            if let Some(ref token) = tg_token {
+                print!("  Validating Telegram token... ");
+                let tg_resp = client.get(format!("https://api.telegram.org/bot{}/getMe", token))
+                    .send().await;
+                match tg_resp {
+                    Ok(r) => {
+                        let body: serde_json::Value = r.json().await.unwrap_or_default();
+                        if body["ok"].as_bool() == Some(true) {
+                            let name = body["result"]["username"].as_str().unwrap_or("?");
+                            println!("✅ @{}", name);
+                        } else {
+                            println!("❌ Invalid token");
+                        }
+                    }
+                    Err(e) => println!("❌ {}", e),
+                }
+            }
+
+            // === Write .env ===
+            let env_path = workspace.join(".env");
+            let mut env_content = String::new();
+            env_content.push_str(&format!("ANTHROPIC_API_KEY=\"{}\"\n", api_key));
+            if let Some(ref t) = tg_token {
+                env_content.push_str(&format!("UNTHINKCLAW_TELEGRAM_TOKEN=\"{}\"\n", t));
+            }
+            if let Some(ref c) = tg_chat_id {
+                env_content.push_str(&format!("UNTHINKCLAW_CHAT_ID=\"{}\"\n", c));
+            }
+            if let Some(ref t) = dc_token {
+                env_content.push_str(&format!("UNTHINKCLAW_DISCORD_TOKEN=\"{}\"\n", t));
+            }
+            if let Some(ref c) = dc_channel {
+                env_content.push_str(&format!("UNTHINKCLAW_DISCORD_CHANNEL=\"{}\"\n", c));
+            }
+            std::fs::write(&env_path, &env_content)?;
+
+            // === Write config ===
             let mut cfg = Config::default_config();
             cfg.provider.name = provider;
-            cfg.provider.api_key = api_key;
+            cfg.provider.api_key = None; // Secrets stay in .env
+            cfg.model = model.clone();
             let json = serde_json::to_string_pretty(&cfg)?;
-            std::fs::write("unthinkclaw.json", &json)?;
-            println!("Created unthinkclaw.json");
+            let config_path = workspace.join("unthinkclaw.json");
+            std::fs::write(&config_path, &json)?;
+
+            // === Write systemd service ===
+            let bin_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("unthinkclaw"));
+            let service_dir = dirs::home_dir().unwrap_or_default().join(".config/systemd/user");
+            std::fs::create_dir_all(&service_dir)?;
+
+            let mut exec_args = format!("{} chat --channel {}", bin_path.display(), channel);
+            if let Some(ref t) = tg_token {
+                exec_args.push_str(&format!(" --telegram-token $UNTHINKCLAW_TELEGRAM_TOKEN --telegram-chat-id {}", tg_chat_id.as_deref().unwrap_or("0")));
+            }
+            exec_args.push_str(&format!(" --model {}", model));
+
+            let run_script = format!(
+                "#!/bin/bash\nsource {}\nexport RUST_LOG=info\ncd {}\nexec {}\n",
+                env_path.display(),
+                workspace.display(),
+                exec_args,
+            );
+            let run_path = workspace.join("run.sh");
+            std::fs::write(&run_path, &run_script)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&run_path, std::fs::Permissions::from_mode(0o755))?;
+            }
+
+            let service = format!(
+                "[Unit]\nDescription=unthinkclaw AI agent\nAfter=network-online.target\n\n\
+                [Service]\nType=simple\nExecStart={}\nRestart=always\nRestartSec=5\n\
+                WorkingDirectory={}\nStandardOutput=append:/tmp/unthinkclaw.log\n\
+                StandardError=append:/tmp/unthinkclaw.log\n\n\
+                [Install]\nWantedBy=default.target\n",
+                run_path.display(), workspace.display()
+            );
+            std::fs::write(service_dir.join("unthinkclaw.service"), &service)?;
+
+            // === Summary ===
+            println!("\n✅ Setup complete!\n");
+            println!("  Provider:  {}", cfg.provider.name);
+            println!("  Model:     {}", model);
+            println!("  Channel:   {}", channel);
+            println!("  Config:    {}", config_path.display());
+            println!("  Secrets:   {}", env_path.display());
+            println!("  Service:   ~/.config/systemd/user/unthinkclaw.service");
+            println!("\n  Commands:");
+            println!("    systemctl --user daemon-reload");
+            println!("    systemctl --user enable --now unthinkclaw");
+            println!("    journalctl --user -u unthinkclaw -f");
+
+            // === Auto-start ===
+            if start {
+                println!("\n  Starting...");
+                let _ = std::process::Command::new("systemctl")
+                    .args(["--user", "daemon-reload"])
+                    .status();
+                let _ = std::process::Command::new("systemctl")
+                    .args(["--user", "enable", "--now", "unthinkclaw"])
+                    .status();
+                println!("  🐾 unthinkclaw is running!");
+            }
         }
 
         Commands::Cron { action, workspace } => {
