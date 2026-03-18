@@ -8,8 +8,6 @@ Use it like this:
 - [TODO.md](TODO.md): short execution list
 - [ROADMAP.md](ROADMAP.md): branch direction
 - [SWARM.md](SWARM.md): current swarm feature shape
-- [CLAW-ADOPTION-TODO.md](CLAW-ADOPTION-TODO.md): larger architectural backlog
-- [SWARM-UPGRADE.md](SWARM-UPGRADE.md): focused migration notes for finishing the swarm/storage move
 
 Rules for docs in this repo:
 

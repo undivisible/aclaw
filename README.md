@@ -115,7 +115,6 @@ Notes:
 - [docs/TODO.md](docs/TODO.md)
 - [docs/ROADMAP.md](docs/ROADMAP.md)
 - [docs/SWARM.md](docs/SWARM.md)
-- [docs/CLAW-ADOPTION-TODO.md](docs/CLAW-ADOPTION-TODO.md)
 
 ## Storage Direction
 
