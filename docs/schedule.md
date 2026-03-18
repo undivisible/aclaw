@@ -1,16 +1,12 @@
-# Your Schedule & Tasks
+# Schedule Notes
 
-## Today's Schedule
-*No events yet*
+This file is not maintained source documentation.
 
-## Upcoming Events
-*No events yet*
+If the runtime writes schedule or task output, treat that as generated state and
+keep it out of the core repo docs flow.
 
-## Active Tasks
-*No tasks yet*
+Current policy:
 
-## Completed Tasks
-*None yet*
-
----
-*Last updated: 2024-03-10*
+- do not use this file as a source of truth
+- do not leave stale placeholder task lists here
+- prefer runtime state, automations, or a dedicated generated output path

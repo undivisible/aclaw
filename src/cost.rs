@@ -61,39 +61,38 @@ pub struct CostTracker {
 
 impl CostTracker {
     pub fn new() -> Self {
-        let mut models = Vec::new();
-
-        // Add standard model pricing (as of 2024)
-        models.push(ModelCost {
-            model: "claude-opus-4-6".to_string(),
-            input_cost_per_1m: 15.0,
-            output_cost_per_1m: 75.0,
-        });
-        models.push(ModelCost {
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            input_cost_per_1m: 3.0,
-            output_cost_per_1m: 15.0,
-        });
-        models.push(ModelCost {
-            model: "gpt-4-turbo".to_string(),
-            input_cost_per_1m: 10.0,
-            output_cost_per_1m: 30.0,
-        });
-        models.push(ModelCost {
-            model: "gpt-4".to_string(),
-            input_cost_per_1m: 30.0,
-            output_cost_per_1m: 60.0,
-        });
-        models.push(ModelCost {
-            model: "gpt-3.5-turbo".to_string(),
-            input_cost_per_1m: 0.5,
-            output_cost_per_1m: 1.5,
-        });
-        models.push(ModelCost {
-            model: "gemini-2.0-flash".to_string(),
-            input_cost_per_1m: 0.075,
-            output_cost_per_1m: 0.3,
-        });
+        let models = vec![
+            ModelCost {
+                model: "claude-opus-4-6".to_string(),
+                input_cost_per_1m: 15.0,
+                output_cost_per_1m: 75.0,
+            },
+            ModelCost {
+                model: "claude-3-5-sonnet-20241022".to_string(),
+                input_cost_per_1m: 3.0,
+                output_cost_per_1m: 15.0,
+            },
+            ModelCost {
+                model: "gpt-4-turbo".to_string(),
+                input_cost_per_1m: 10.0,
+                output_cost_per_1m: 30.0,
+            },
+            ModelCost {
+                model: "gpt-4".to_string(),
+                input_cost_per_1m: 30.0,
+                output_cost_per_1m: 60.0,
+            },
+            ModelCost {
+                model: "gpt-3.5-turbo".to_string(),
+                input_cost_per_1m: 0.5,
+                output_cost_per_1m: 1.5,
+            },
+            ModelCost {
+                model: "gemini-2.0-flash".to_string(),
+                input_cost_per_1m: 0.075,
+                output_cost_per_1m: 0.3,
+            },
+        ];
 
         Self {
             costs: Arc::new(RwLock::new(Vec::new())),
@@ -201,6 +200,12 @@ impl CostTracker {
     /// Get current rate limit status
     pub async fn get_rate_limits(&self) -> Option<RateLimitStatus> {
         self.rate_limit_status.read().await.clone()
+    }
+}
+
+impl Default for CostTracker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

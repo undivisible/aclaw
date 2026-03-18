@@ -7,32 +7,22 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 
 use unthinkclaw::agent::AgentRunner;
+use unthinkclaw::bootstrap::{
+    build_base_tools, build_embedding_provider, build_memory_backend, build_provider, load_config,
+};
 #[cfg(feature = "channel-cli")]
 use unthinkclaw::channels::cli::CliChannel;
 #[cfg(feature = "channel-discord")]
 use unthinkclaw::channels::discord::DiscordChannel;
-#[cfg(feature = "channel-telegram")]
-use unthinkclaw::channels::telegram::TelegramChannel;
-use unthinkclaw::channels::Channel as _;
 use unthinkclaw::config::Config;
 use unthinkclaw::cron_scheduler::CronScheduler;
 use unthinkclaw::diagnostics::{collect_doctor_report, render_doctor_report, render_findings};
 use unthinkclaw::heartbeat::{self, HeartbeatConfig};
-use unthinkclaw::memory::search::{MemoryGetTool, MemorySearchTool};
-use unthinkclaw::memory::sqlite::SqliteMemory;
-use unthinkclaw::memory::MemoryBackend;
 use unthinkclaw::policy::ExecutionPolicy;
 use unthinkclaw::prompt;
-#[cfg(feature = "provider-anthropic")]
-use unthinkclaw::providers::anthropic::AnthropicProvider;
-#[cfg(feature = "provider-ollama")]
-use unthinkclaw::providers::ollama::OllamaProvider;
-use unthinkclaw::providers::openai_compat::OpenAiCompatProvider;
-use unthinkclaw::providers::Provider;
+use unthinkclaw::self_update::{SelfUpdater, UpdateOutcome};
 use unthinkclaw::skills;
-use unthinkclaw::tools::file_ops::{FileReadTool, FileWriteTool};
-use unthinkclaw::tools::shell::ShellTool;
-use unthinkclaw::tools::Tool;
+use unthinkclaw::telegram_runtime::run_telegram_chat;
 
 #[derive(Parser)]
 #[command(
@@ -124,6 +114,17 @@ enum Commands {
 
     /// Show runtime status
     Status,
+
+    /// Run one self-update cycle against the current repo
+    SelfUpdate {
+        /// Configuration file path
+        #[arg(short, long, default_value = "unthinkclaw.json")]
+        config: String,
+
+        /// Workspace directory
+        #[arg(short, long)]
+        workspace: Option<PathBuf>,
+    },
 
     /// Initialize configuration (interactive wizard or one-command setup)
     Init {
@@ -396,18 +397,26 @@ async fn main() -> anyhow::Result<()> {
             let provider = build_provider(&cfg);
             let policy = Arc::new(ExecutionPolicy::from_config(&cfg.policy));
             let memory = build_memory_backend(&workspace, &cfg).await?;
+            let embedding_provider = build_embedding_provider(&cfg)?;
+            let self_updater = SelfUpdater::new(workspace.clone(), cfg.runtime.self_update.clone());
 
             // Build system prompt from workspace context files
             let system_prompt = prompt::build_system_prompt(&workspace).await;
 
             // Discover skills
-            let discovered_skills = skills::discover_skills();
+            let discovered_skills = skills::discover_skills_for_workspace(Some(&workspace));
             if !discovered_skills.is_empty() {
                 tracing::info!("Discovered {} skills", discovered_skills.len());
             }
 
             // Register tools (including memory search/get)
-            let mut tools = build_base_tools(&workspace, Arc::clone(&policy));
+            let mut tools = build_base_tools(
+                &workspace,
+                Arc::clone(&policy),
+                memory.clone(),
+                embedding_provider,
+                &cfg.toolsets,
+            );
 
             // Load any previously created dynamic tools
             let dynamic_tools =
@@ -442,6 +451,8 @@ async fn main() -> anyhow::Result<()> {
                 // For now, the ticker runs and logs due jobs
             }
 
+            let _self_update_handle = self_updater.start();
+
             match channel.as_str() {
                 #[cfg(feature = "channel-cli")]
                 "cli" => {
@@ -472,313 +483,16 @@ async fn main() -> anyhow::Result<()> {
                         .ok_or_else(|| anyhow::anyhow!("--telegram-token required"))?;
                     let chat_id = telegram_chat_id
                         .ok_or_else(|| anyhow::anyhow!("--telegram-chat-id required"))?;
-
-                    let tg = TelegramChannel::new(token.clone(), chat_id);
-                    let tg_arc = Arc::new(tg.clone());
-
-                    // Add late-binding tools that need references
-                    runner
-                        .add_tool(Arc::new(unthinkclaw::tools::message::MessageTool::new(
-                            tg_arc.clone(),
-                        )))
-                        .await;
-
-                    // Wrap runner in Arc for session_status
-                    let runner = Arc::new(runner);
-                    // Note: session_status needs Arc<AgentRunner> but AgentRunner isn't Clone-able
-                    // For now, session_status is available via /status command and list_models tool
-
-                    println!("unthinkclaw — {} via Telegram", cfg.model);
-                    println!("   Chat ID: {}", chat_id);
-                    println!("   Tools: {}", runner.list_tools().await.join(", "));
-                    println!("   API: http://127.0.0.1:31337/message");
-                    println!("   Listening for messages...");
-                    let mut ch = TelegramChannel::new(token, chat_id);
-                    let mut rx = ch.start().await?;
-
-                    // Local HTTP API for CLI → bot messaging
-                    let (cli_tx, mut cli_rx) = tokio::sync::mpsc::channel::<unthinkclaw::channels::IncomingMessage>(32);
-                    {
-                        let chat_id_clone = chat_id.to_string();
-                        tokio::spawn(async move {
-                            use axum::{Router, routing::post, Json, extract::State};
-
-                            let app = Router::new()
-                                .route("/message", post(|State(tx): State<tokio::sync::mpsc::Sender<unthinkclaw::channels::IncomingMessage>>, Json(body): Json<serde_json::Value>| async move {
-                                    let text = body["message"].as_str().unwrap_or("").to_string();
-                                    if text.is_empty() {
-                                        return (axum::http::StatusCode::BAD_REQUEST, "missing 'message' field");
-                                    }
-                                    let msg = unthinkclaw::channels::IncomingMessage {
-                                        id: format!("cli-{}", chrono::Utc::now().timestamp()),
-                                        chat_id: chat_id_clone.clone(),
-                                        sender_id: "cli".to_string(),
-                                        sender_name: Some("CLI".to_string()),
-                                        text,
-                                        timestamp: chrono::Utc::now(),
-                                        is_group: false,
-                                        reply_to: None,
-                                    };
-                                    let _ = tx.send(msg).await;
-                                    (axum::http::StatusCode::OK, "queued")
-                                }))
-                                .with_state(cli_tx);
-
-                            let listener = tokio::net::TcpListener::bind("127.0.0.1:31337").await.unwrap();
-                            axum::serve(listener, app).await.unwrap();
-                        });
-                    }
-
-                    let processing = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-                    loop {
-                    let msg = tokio::select! {
-                        Some(msg) = rx.recv() => msg,
-                        Some(msg) = cli_rx.recv() => msg,
-                        else => break,
-                    };
-                        let text = msg.text.trim();
-
-                        // If we're processing and this isn't a command, steer
-                        if processing.load(std::sync::atomic::Ordering::SeqCst)
-                            && !text.starts_with('/')
-                        {
-                            runner.steer(text.to_string());
-                            let _ = tg.send_message("📌 Noted — steering current task.").await;
-                            continue;
-                        }
-
-                        // Handle slash commands
-                        if text.starts_with('/') {
-                            let parts: Vec<&str> = text.splitn(2, ' ').collect();
-                            let cmd = parts[0].to_lowercase();
-                            let arg = parts.get(1).map(|s| s.trim()).unwrap_or("");
-
-                            match cmd.as_str() {
-                                "/stop" | "/cancel" => {
-                                    let _ = tg.send_message("⛔ Stopped.").await;
-                                    continue;
-                                }
-                                "/help" => {
-                                    let _ = tg
-                                        .send_message(
-                                            "🐾 *unthinkclaw commands:*\n\n\
-                                        /stop — Stop current operation (saves tokens!)\n\
-                                        /help — Show this message\n\
-                                        /model — Show current model\n\
-                                        /model <name> — Switch model\n\
-                                        /models — List available models\n\
-                                        /tools — List available tools\n\
-                                        /status — Bot status\n\
-                                        /cost — API usage & spending\n\
-                                        /reset — Clear conversation history\n\n\
-                                        Everything else is sent to the AI.",
-                                        )
-                                        .await;
-                                    continue;
-                                }
-                                "/model" | "/model@unthinkclaw_bot" => {
-                                    if arg.is_empty() {
-                                        let _ = tg.send_message(&format!(
-                                            "Current model: `{}`\n\nUse `/model <name>` to switch.\nUse `/models` for available options.",
-                                            runner.get_model()
-                                        )).await;
-                                    } else {
-                                        runner.set_model(arg);
-                                        let _ = tg
-                                            .send_message(&format!(
-                                                "✅ Model switched to: `{}`",
-                                                arg
-                                            ))
-                                            .await;
-                                        tracing::info!("Model switched to: {}", arg);
-                                    }
-                                    continue;
-                                }
-                                "/models" => {
-                                    let _ = tg
-                                        .send_message(
-                                            "📋 *Available models:*\n\n\
-                                        `claude-sonnet-4-5` — Fast, smart (default)\n\
-                                        `claude-opus-4` — Most capable\n\
-                                        `claude-haiku-3-5` — Fastest, cheapest\n\n\
-                                        Switch with: `/model claude-opus-4`",
-                                        )
-                                        .await;
-                                    continue;
-                                }
-                                "/tools" => {
-                                    let tool_list = runner.list_tools().await;
-                                    let formatted = tool_list
-                                        .iter()
-                                        .map(|t| format!("• `{}`", t))
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    let _ = tg
-                                        .send_message(&format!(
-                                            "🔧 *Available tools ({}):\n\n{}*",
-                                            tool_list.len(),
-                                            formatted
-                                        ))
-                                        .await;
-                                    continue;
-                                }
-                                "/status" => {
-                                    let _ = tg
-                                        .send_message(&format!(
-                                            "🐾 *unthinkclaw status:*\n\n\
-                                        Model: `{}`\n\
-                                        Tools: {}\n\
-                                        Skills: {}\n\
-                                        Channel: Telegram\n\
-                                        PID: {}",
-                                            runner.get_model(),
-                                            runner.list_tools().await.len(),
-                                            discovered_skills.len(),
-                                            std::process::id(),
-                                        ))
-                                        .await;
-                                    continue;
-                                }
-                                "/reset" => {
-                                    // Clear conversation history from SQLite
-                                    let _ = memory
-                                        .forget("chat", &format!("conv_{}", msg.chat_id))
-                                        .await;
-                                    let _ =
-                                        tg.send_message("🗑 Conversation history cleared.").await;
-                                    continue;
-                                }
-                                "/cost" => {
-                                    let summary = runner.get_cost_summary().await;
-                                    let mut by_model: Vec<_> = summary.by_model.iter().collect();
-                                    by_model.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
-
-                                    let model_breakdown = if by_model.is_empty() {
-                                        "No usage yet.".to_string()
-                                    } else {
-                                        by_model
-                                            .iter()
-                                            .map(|(model, cost)| {
-                                                format!("  • {}: ${:.4}", model, cost)
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join("\n")
-                                    };
-
-                                    let _ = tg
-                                        .send_message(&format!(
-                                            "💰 *Cost Summary:*\n\n\
-                                        Total: ${:.4}\n\
-                                        Tokens: {}\n\
-                                        Calls: {}\n\n\
-                                        By model:\n{}",
-                                            summary.total_cost,
-                                            summary.total_tokens,
-                                            summary.call_count,
-                                            model_breakdown,
-                                        ))
-                                        .await;
-                                    continue;
-                                }
-                                "/start" => {
-                                    let _ = tg
-                                        .send_message(
-                                            "🐾 *unthinkclaw* — AI assistant\n\n\
-                                        Just type a message to chat.\n\
-                                        Use /help for commands.\n\
-                                        Use /tools to see what I can do.",
-                                        )
-                                        .await;
-                                    continue;
-                                }
-                                _ => {
-                                    // Unknown command — pass to AI
-                                }
-                            }
-                        }
-
-                        processing.store(true, std::sync::atomic::Ordering::SeqCst);
-
-                        // Send "thinking..." progress message
-                        let _ = tg.send_typing().await;
-                        let progress_msg_id = tg.send_message("⏳").await.unwrap_or(0);
-
-                        // Create progress channel
-                        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(32);
-
-                        // Spawn progress update task
-                        let tg_progress = tg.clone();
-                        let progress_task = tokio::spawn(async move {
-                            while let Some(update) = progress_rx.recv().await {
-                                use unthinkclaw::agent::loop_runner::ProgressUpdate;
-                                let status_text = match update {
-                                    ProgressUpdate::Thinking => "thinking...".to_string(),
-                                    ProgressUpdate::ToolCall { name, round } => {
-                                        // Descriptive tool names with emoji
-                                        let display = match name.as_str() {
-                                            "exec" => "running shell command",
-                                            "Read" => "reading file",
-                                            "Write" => "writing file",
-                                            "Edit" => "editing file",
-                                            "web_search" => "searching web",
-                                            "web_fetch" => "fetching webpage",
-                                            "memory_search" => "searching memory",
-                                            "browser" => "browsing web",
-                                            "create_tool" => "creating custom tool",
-                                            _ => &name,
-                                        };
-                                        format!("🔧 {} (round {})", display, round)
-                                    }
-                                    ProgressUpdate::Processing { round, tool_count } => {
-                                        if round == 0 || tool_count == 0 {
-                                            break;
-                                        }
-                                        format!(
-                                            "processing... round {} ({} tools)",
-                                            round, tool_count
-                                        )
-                                    }
-                                };
-
-                                if progress_msg_id > 0 {
-                                    let _ = tg_progress
-                                        .edit_message(progress_msg_id, &status_text)
-                                        .await;
-                                }
-                            }
-                        });
-
-                        // Process message
-                        match runner.handle_message_pub(&msg, Some(&progress_tx)).await {
-                            Ok(response) => {
-                                let _ = progress_tx.send(unthinkclaw::agent::loop_runner::ProgressUpdate::Processing {
-                                    round: 0,
-                                    tool_count: 0,
-                                }).await;
-                                drop(progress_tx);
-                                let _ = progress_task.await;
-
-                                // Delete progress message
-                                if progress_msg_id > 0 {
-                                    let _ = tg.delete_message(progress_msg_id).await;
-                                }
-                                // Send final response
-                                let _ = tg.send_message(&response).await;
-                            }
-                            Err(e) => {
-                                drop(progress_tx);
-                                let _ = progress_task.await;
-
-                                if progress_msg_id > 0 {
-                                    let _ = tg
-                                        .edit_message(progress_msg_id, &format!("❌ {}", e))
-                                        .await;
-                                }
-                            }
-                        }
-                        processing.store(false, std::sync::atomic::Ordering::SeqCst);
-                    }
+                    run_telegram_chat(
+                        runner,
+                        memory,
+                        token,
+                        chat_id,
+                        cfg.model.clone(),
+                        discovered_skills.len(),
+                        workspace.clone(),
+                    )
+                    .await?;
                 }
                 #[cfg(feature = "channel-discord")]
                 "discord" => {
@@ -843,10 +557,42 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => {
             println!("unthinkclaw v{}", env!("CARGO_PKG_VERSION"));
             println!("Status: OK");
-            println!("Commands: chat, ask, doctor, audit, status, init, cron, swarm");
+            println!("Commands: chat, ask, doctor, audit, status, self-update, init, cron, swarm");
         }
 
-        Commands::Init { provider, api_key, channel, telegram_token, telegram_chat_id, discord_token, discord_channel_id, model, start, workspace } => {
+        Commands::SelfUpdate { config, workspace } => {
+            let cfg = load_config(&config);
+            let workspace = workspace.unwrap_or(cfg.workspace.clone());
+            let updater = SelfUpdater::new(workspace, cfg.runtime.self_update.clone());
+            match updater.run_once().await? {
+                UpdateOutcome::NoRepo => println!("Not a git repo. Nothing to update."),
+                UpdateOutcome::Disabled => println!("Self-update is disabled in config."),
+                UpdateOutcome::DirtyWorktree => {
+                    println!("Skipped self-update because the worktree is dirty.");
+                }
+                UpdateOutcome::AlreadyCurrent => println!("Already up to date."),
+                UpdateOutcome::Updated { restarted } => {
+                    if restarted {
+                        println!("Updated, rebuilt, and restarted service.");
+                    } else {
+                        println!("Updated and rebuilt. Restart the process or service if needed.");
+                    }
+                }
+            }
+        }
+
+        Commands::Init {
+            provider,
+            api_key,
+            channel,
+            telegram_token,
+            telegram_chat_id,
+            discord_token,
+            discord_channel_id,
+            model,
+            start,
+            workspace,
+        } => {
             let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
             println!("🐾 unthinkclaw setup\n");
 
@@ -858,7 +604,9 @@ async fn main() -> anyhow::Result<()> {
                     let mut buf = String::new();
                     std::io::stdin().read_line(&mut buf)?;
                     let k = buf.trim().to_string();
-                    if k.is_empty() { anyhow::bail!("API key required"); }
+                    if k.is_empty() {
+                        anyhow::bail!("API key required");
+                    }
                     k
                 }
             };
@@ -870,17 +618,15 @@ async fn main() -> anyhow::Result<()> {
                     let mut buf = String::new();
                     std::io::stdin().read_line(&mut buf)?;
                     let c = buf.trim().to_string();
-                    if c.is_empty() { "telegram".to_string() } else { c }
+                    if c.is_empty() {
+                        "telegram".to_string()
+                    } else {
+                        c
+                    }
                 }
             };
 
-            let model = model.unwrap_or_else(|| {
-                if api_key.contains("sk-ant-oat") {
-                    "claude-sonnet-4-5".to_string()
-                } else {
-                    "claude-sonnet-4-5".to_string()
-                }
-            });
+            let model = model.unwrap_or_else(|| "claude-sonnet-4-5".to_string());
 
             // Channel-specific tokens
             let tg_token = if channel == "telegram" {
@@ -891,10 +637,16 @@ async fn main() -> anyhow::Result<()> {
                         let mut buf = String::new();
                         std::io::stdin().read_line(&mut buf)?;
                         let t = buf.trim().to_string();
-                        if t.is_empty() { None } else { Some(t) }
+                        if t.is_empty() {
+                            None
+                        } else {
+                            Some(t)
+                        }
                     }
                 }
-            } else { telegram_token };
+            } else {
+                telegram_token
+            };
 
             let tg_chat_id = if channel == "telegram" {
                 match telegram_chat_id {
@@ -904,39 +656,73 @@ async fn main() -> anyhow::Result<()> {
                         let mut buf = String::new();
                         std::io::stdin().read_line(&mut buf)?;
                         let c = buf.trim().to_string();
-                        if c.is_empty() { None } else { Some(c) }
+                        if c.is_empty() {
+                            None
+                        } else {
+                            Some(c)
+                        }
                     }
                 }
-            } else { telegram_chat_id };
+            } else {
+                telegram_chat_id
+            };
 
-            let dc_token = if channel == "discord" { discord_token } else { None };
-            let dc_channel = if channel == "discord" { discord_channel_id } else { None };
+            let dc_token = if channel == "discord" {
+                discord_token
+            } else {
+                None
+            };
+            let dc_channel = if channel == "discord" {
+                discord_channel_id
+            } else {
+                None
+            };
 
             // === Validate ===
-            print!("\n  Validating API key... ");
             let client = reqwest::Client::new();
-            let is_oauth = api_key.contains("sk-ant-oat");
-            let auth_resp = if is_oauth {
-                client.get("https://api.anthropic.com/v1/models")
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .header("anthropic-version", "2023-06-01")
-                    .send().await
-            } else {
-                client.get("https://api.anthropic.com/v1/models")
-                    .header("x-api-key", &api_key)
-                    .header("anthropic-version", "2023-06-01")
-                    .send().await
-            };
-            match auth_resp {
-                Ok(r) if r.status().is_success() => println!("✅"),
-                Ok(r) => println!("⚠️  HTTP {} (may still work)", r.status()),
-                Err(e) => println!("❌ {}", e),
+            match provider.as_str() {
+                "ollama" => {
+                    print!("\n  Validating Ollama... ");
+                    let base_url = "http://localhost:11434";
+                    let resp = client.get(format!("{}/api/tags", base_url)).send().await;
+                    match resp {
+                        Ok(r) if r.status().is_success() => println!("✅"),
+                        Ok(r) => println!("⚠️  HTTP {} from local Ollama", r.status()),
+                        Err(e) => println!("❌ {}", e),
+                    }
+                }
+                _ => {
+                    print!("\n  Validating API key... ");
+                    let is_oauth = api_key.contains("sk-ant-oat");
+                    let auth_resp = if is_oauth {
+                        client
+                            .get("https://api.anthropic.com/v1/models")
+                            .header("Authorization", format!("Bearer {}", api_key))
+                            .header("anthropic-version", "2023-06-01")
+                            .send()
+                            .await
+                    } else {
+                        client
+                            .get("https://api.anthropic.com/v1/models")
+                            .header("x-api-key", &api_key)
+                            .header("anthropic-version", "2023-06-01")
+                            .send()
+                            .await
+                    };
+                    match auth_resp {
+                        Ok(r) if r.status().is_success() => println!("✅"),
+                        Ok(r) => println!("⚠️  HTTP {} (may still work)", r.status()),
+                        Err(e) => println!("❌ {}", e),
+                    }
+                }
             }
 
             if let Some(ref token) = tg_token {
                 print!("  Validating Telegram token... ");
-                let tg_resp = client.get(format!("https://api.telegram.org/bot{}/getMe", token))
-                    .send().await;
+                let tg_resp = client
+                    .get(format!("https://api.telegram.org/bot{}/getMe", token))
+                    .send()
+                    .await;
                 match tg_resp {
                     Ok(r) => {
                         let body: serde_json::Value = r.json().await.unwrap_or_default();
@@ -954,7 +740,11 @@ async fn main() -> anyhow::Result<()> {
             // === Write .env ===
             let env_path = workspace.join(".env");
             let mut env_content = String::new();
-            env_content.push_str(&format!("ANTHROPIC_API_KEY=\"{}\"\n", api_key));
+            if provider == "ollama" {
+                env_content.push_str("OLLAMA_BASE_URL=\"http://localhost:11434\"\n");
+            } else {
+                env_content.push_str(&format!("ANTHROPIC_API_KEY=\"{}\"\n", api_key));
+            }
             if let Some(ref t) = tg_token {
                 env_content.push_str(&format!("UNTHINKCLAW_TELEGRAM_TOKEN=\"{}\"\n", t));
             }
@@ -971,8 +761,17 @@ async fn main() -> anyhow::Result<()> {
 
             // === Write config ===
             let mut cfg = Config::default_config();
-            cfg.provider.name = provider;
+            cfg.provider.name = provider.clone();
             cfg.provider.api_key = None; // Secrets stay in .env
+            if provider == "ollama" {
+                cfg.provider.base_url = Some("http://localhost:11434".to_string());
+                if cfg.embeddings.provider == "noop" {
+                    cfg.embeddings.enabled = true;
+                    cfg.embeddings.provider = "ollama".to_string();
+                    cfg.embeddings.model = Some("nomic-embed-text".to_string());
+                    cfg.embeddings.base_url = Some("http://localhost:11434".to_string());
+                }
+            }
             cfg.model = model.clone();
             let json = serde_json::to_string_pretty(&cfg)?;
             let config_path = workspace.join("unthinkclaw.json");
@@ -980,12 +779,17 @@ async fn main() -> anyhow::Result<()> {
 
             // === Write systemd service ===
             let bin_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("unthinkclaw"));
-            let service_dir = dirs::home_dir().unwrap_or_default().join(".config/systemd/user");
+            let service_dir = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".config/systemd/user");
             std::fs::create_dir_all(&service_dir)?;
 
             let mut exec_args = format!("{} chat --channel {}", bin_path.display(), channel);
-            if let Some(ref t) = tg_token {
-                exec_args.push_str(&format!(" --telegram-token $UNTHINKCLAW_TELEGRAM_TOKEN --telegram-chat-id {}", tg_chat_id.as_deref().unwrap_or("0")));
+            if tg_token.is_some() {
+                exec_args.push_str(&format!(
+                    " --telegram-token $UNTHINKCLAW_TELEGRAM_TOKEN --telegram-chat-id {}",
+                    tg_chat_id.as_deref().unwrap_or("0")
+                ));
             }
             exec_args.push_str(&format!(" --model {}", model));
 
@@ -1009,7 +813,8 @@ async fn main() -> anyhow::Result<()> {
                 WorkingDirectory={}\nStandardOutput=append:/tmp/unthinkclaw.log\n\
                 StandardError=append:/tmp/unthinkclaw.log\n\n\
                 [Install]\nWantedBy=default.target\n",
-                run_path.display(), workspace.display()
+                run_path.display(),
+                workspace.display()
             );
             std::fs::write(service_dir.join("unthinkclaw.service"), &service)?;
 
@@ -1039,9 +844,14 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Message { message, chat_id: _, workspace: _ } => {
+        Commands::Message {
+            message,
+            chat_id: _,
+            workspace: _,
+        } => {
             let client = reqwest::Client::new();
-            let resp = client.post("http://127.0.0.1:31337/message")
+            let resp = client
+                .post("http://127.0.0.1:31337/message")
                 .json(&serde_json::json!({ "message": message }))
                 .send()
                 .await;
@@ -1051,7 +861,11 @@ async fn main() -> anyhow::Result<()> {
                     println!("✅ Sent to unthinkclaw");
                 }
                 Ok(r) => {
-                    eprintln!("❌ HTTP {}: {}", r.status(), r.text().await.unwrap_or_default());
+                    eprintln!(
+                        "❌ HTTP {}: {}",
+                        r.status(),
+                        r.text().await.unwrap_or_default()
+                    );
                 }
                 Err(_) => {
                     eprintln!("❌ Can't reach unthinkclaw. Is it running? (systemctl --user status unthinkclaw)");
@@ -1406,13 +1220,10 @@ fn config_path_for_cli(cli: &Cli) -> Option<String> {
         Commands::Chat { config, .. }
         | Commands::Ask { config, .. }
         | Commands::Doctor { config, .. }
-        | Commands::Audit { config, .. } => Some(config.clone()),
+        | Commands::Audit { config, .. }
+        | Commands::SelfUpdate { config, .. } => Some(config.clone()),
         _ => None,
     }
-}
-
-fn default_local_state_path(workspace: &PathBuf) -> PathBuf {
-    workspace.join(".unthinkclaw/state.surreal")
 }
 
 fn init_tracing(cfg: &unthinkclaw::config::ObservabilityConfig) -> anyhow::Result<()> {
@@ -1433,231 +1244,4 @@ fn init_tracing(cfg: &unthinkclaw::config::ObservabilityConfig) -> anyhow::Resul
         "tracing initialized"
     );
     Ok(())
-}
-
-fn load_config(path: &str) -> Config {
-    let mut cfg = Config::load(path).unwrap_or_else(|_| {
-        tracing::warn!("Config not found at {}, using defaults", path);
-        Config::default_config()
-    });
-
-    // Env always wins — override api_key from ANTHROPIC_API_KEY if set
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        cfg.provider.api_key = Some(key.clone());
-        if key.contains("sk-ant-oat") && cfg.model.is_empty() {
-            cfg.model = "claude-sonnet-4-5".to_string();
-        }
-    }
-
-    if cfg.provider.api_key.is_none() {
-        if let Ok(token) = resolve_openclaw_token("anthropic") {
-            cfg.provider.api_key = Some(token);
-            if cfg.model.is_empty() { cfg.model = "claude-sonnet-4-5".to_string(); }
-        }
-        #[cfg(feature = "provider-anthropic")]
-        {
-            if let Ok(_provider) =
-                unthinkclaw::providers::anthropic::AnthropicProvider::from_env_or_oauth()
-            {
-                // Fallback to Claude.dev credentials file
-                let _ = _provider; // Just checking it exists
-                if let Ok((token, _, _)) =
-                    unthinkclaw::providers::oauth::load_oauth_token_from_file()
-                {
-                    cfg.provider.api_key = Some(token);
-                    cfg.model = "claude-sonnet-4-5".to_string();
-                }
-            }
-        }
-
-        if cfg.provider.api_key.is_none() {
-            if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-                cfg.provider.name = "openai".to_string();
-                cfg.provider.api_key = Some(key);
-            }
-        }
-    }
-
-    cfg
-}
-
-/// Resolve token from OpenClaw's auth-profiles.json
-fn resolve_openclaw_token(provider: &str) -> anyhow::Result<String> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("No home dir"))?;
-    let auth_path = home.join(".openclaw/agents/main/agent/auth-profiles.json");
-
-    if !auth_path.exists() {
-        return Err(anyhow::anyhow!("No auth-profiles.json found"));
-    }
-
-    let content = std::fs::read_to_string(&auth_path)?;
-    let data: serde_json::Value = serde_json::from_str(&content)?;
-
-    // Try provider:default first
-    let profile_key = format!("{}:default", provider);
-    if let Some(profile) = data["profiles"][&profile_key].as_object() {
-        // Check for token field (OAuth/token type)
-        if let Some(token) = profile.get("token").and_then(|t| t.as_str()) {
-            if !token.is_empty() {
-                tracing::info!("Loaded {} token from OpenClaw auth-profiles", provider);
-                return Ok(token.to_string());
-            }
-        }
-        // Check for key field (API key type)
-        if let Some(key) = profile.get("key").and_then(|k| k.as_str()) {
-            if !key.is_empty() {
-                tracing::info!("Loaded {} API key from OpenClaw auth-profiles", provider);
-                return Ok(key.to_string());
-            }
-        }
-    }
-
-    // Try any profile for this provider
-    if let Some(profiles) = data["profiles"].as_object() {
-        for (key, value) in profiles {
-            if let Some(p) = value["provider"].as_str() {
-                if p == provider {
-                    if let Some(token) = value["token"].as_str() {
-                        if !token.is_empty() {
-                            tracing::info!(
-                                "Loaded {} token from OpenClaw profile {}",
-                                provider,
-                                key
-                            );
-                            return Ok(token.to_string());
-                        }
-                    }
-                    if let Some(key_val) = value["key"].as_str() {
-                        if !key_val.is_empty() {
-                            tracing::info!("Loaded {} key from OpenClaw profile {}", provider, key);
-                            return Ok(key_val.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Err(anyhow::anyhow!(
-        "No {} credentials in auth-profiles",
-        provider
-    ))
-}
-
-fn build_provider(cfg: &Config) -> Arc<dyn Provider> {
-    let api_key = cfg.provider.api_key.clone().unwrap_or_default();
-
-    match cfg.provider.name.as_str() {
-        #[cfg(feature = "provider-anthropic")]
-        "anthropic" | "claude" => {
-            let mut p = AnthropicProvider::new(&api_key);
-            if let Some(url) = &cfg.provider.base_url {
-                p = p.with_base_url(url);
-            }
-            Arc::new(p)
-        }
-        #[cfg(feature = "provider-copilot")]
-        "github-copilot" | "copilot" => {
-            if let Ok(p) = unthinkclaw::providers::copilot::CopilotProvider::from_openclaw() {
-                Arc::new(p)
-            } else {
-                Arc::new(unthinkclaw::providers::copilot::CopilotProvider::new(
-                    &api_key,
-                ))
-            }
-        }
-        #[cfg(feature = "provider-ollama")]
-        "ollama" => {
-            let url = cfg
-                .provider
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "http://localhost:11434".into());
-            Arc::new(OllamaProvider::new(url))
-        }
-        // All OpenAI-compatible providers (always available)
-        "openai" => Arc::new(OpenAiCompatProvider::openai(&api_key)),
-        "openrouter" => Arc::new(OpenAiCompatProvider::openrouter(&api_key)),
-        "groq" => Arc::new(OpenAiCompatProvider::groq(&api_key)),
-        "together" => Arc::new(OpenAiCompatProvider::together(&api_key)),
-        "mistral" => Arc::new(OpenAiCompatProvider::mistral(&api_key)),
-        "deepseek" => Arc::new(OpenAiCompatProvider::deepseek(&api_key)),
-        "fireworks" => Arc::new(OpenAiCompatProvider::fireworks(&api_key)),
-        "perplexity" => Arc::new(OpenAiCompatProvider::perplexity(&api_key)),
-        "xai" | "grok" => Arc::new(OpenAiCompatProvider::xai(&api_key)),
-        "moonshot" | "kimi" => Arc::new(OpenAiCompatProvider::moonshot(&api_key)),
-        "venice" => Arc::new(OpenAiCompatProvider::venice(&api_key)),
-        "huggingface" => Arc::new(OpenAiCompatProvider::huggingface(&api_key)),
-        "siliconflow" => Arc::new(OpenAiCompatProvider::siliconflow(&api_key)),
-        "cerebras" => Arc::new(OpenAiCompatProvider::cerebras(&api_key)),
-        "minimax" => Arc::new(OpenAiCompatProvider::minimax(&api_key)),
-        "vercel" => Arc::new(OpenAiCompatProvider::vercel(&api_key)),
-        other => {
-            let base = cfg
-                .provider
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "https://api.openai.com/v1".into());
-            Arc::new(OpenAiCompatProvider::new(&api_key, base, other))
-        }
-    }
-}
-
-fn build_base_tools(workspace: &PathBuf, policy: Arc<ExecutionPolicy>) -> Vec<Arc<dyn Tool>> {
-    vec![
-        Arc::new(ShellTool::new(workspace.clone(), Arc::clone(&policy))),
-        Arc::new(FileReadTool::new(workspace.clone())),
-        Arc::new(FileWriteTool::new(workspace.clone())),
-        Arc::new(unthinkclaw::tools::edit::EditTool::new(workspace.clone())),
-        Arc::new(MemorySearchTool::new(workspace.clone())),
-        Arc::new(MemoryGetTool::new(workspace.clone())),
-        Arc::new(unthinkclaw::tools::web_search::WebSearchTool::new()),
-        Arc::new(unthinkclaw::tools::web_fetch::WebFetchTool::new()),
-        Arc::new(unthinkclaw::tools::doctor::DoctorTool::new()),
-        Arc::new(unthinkclaw::tools::session::ListModelsTool::new()),
-        Arc::new(unthinkclaw::tools::dynamic::CreateToolTool::new(
-            Arc::clone(&policy),
-        )),
-        Arc::new(unthinkclaw::tools::dynamic::ListCustomToolsTool::new()),
-        Arc::new(unthinkclaw::tools::browser::BrowserTool::new()),
-        Arc::new(unthinkclaw::tools::mcp::McpTool::new()),
-    ]
-}
-
-async fn build_memory_backend(
-    workspace: &PathBuf,
-    cfg: &Config,
-) -> anyhow::Result<Arc<dyn MemoryBackend>> {
-    let storage_root = workspace.join(&cfg.storage.root);
-    std::fs::create_dir_all(&storage_root)?;
-    let backend = cfg.storage.backend.trim().to_ascii_lowercase();
-
-    match backend.as_str() {
-        "sqlite" => Ok(Arc::new(SqliteMemory::new(
-            &storage_root.join("memory.db").to_string_lossy(),
-        )?)),
-        #[cfg(feature = "swarm")]
-        "surreal" => {
-            let surreal_path = storage_root.join("memory.surreal");
-            let memory =
-                unthinkclaw::memory::surreal::SurrealMemory::new(surreal_path.as_path()).await?;
-            Ok(Arc::new(memory))
-        }
-        _ => {
-            // Default: try SurrealDB first (if compiled), fall back to SQLite
-            #[cfg(feature = "swarm")]
-            {
-                let surreal_path = storage_root.join("memory.surreal");
-                if let Ok(memory) =
-                    unthinkclaw::memory::surreal::SurrealMemory::new(surreal_path.as_path()).await
-                {
-                    return Ok(Arc::new(memory));
-                }
-            }
-
-            Ok(Arc::new(SqliteMemory::new(
-                &storage_root.join("memory.db").to_string_lossy(),
-            )?))
-        }
-    }
 }

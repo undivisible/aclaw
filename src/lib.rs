@@ -15,6 +15,7 @@
 //! Scheduler — Cron-based task automation (Phase 4)
 
 pub mod agent;
+pub mod bootstrap;
 pub mod channels;
 pub mod claw_adapter;
 pub mod config;
@@ -31,9 +32,11 @@ pub mod prompt;
 pub mod providers;
 pub mod runtime;
 pub mod scheduler;
+pub mod self_update;
 pub mod skills;
 #[cfg(feature = "swarm")]
 pub mod swarm;
+pub mod telegram_runtime;
 pub mod tools;
 
 pub use agent::AgentRunner;

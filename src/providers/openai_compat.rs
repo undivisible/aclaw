@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use super::retry::send_with_retry;
 use super::traits::*;
 use crate::tools::ToolSpec;
 
@@ -182,13 +183,15 @@ impl Provider for OpenAiCompatProvider {
             }
         }
 
-        let resp = client
-            .post(format!("{}/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let resp = send_with_retry(
+            client
+                .post(format!("{}/chat/completions", self.base_url))
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body),
+            self.name(),
+        )
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();

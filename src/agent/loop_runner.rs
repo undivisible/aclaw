@@ -521,12 +521,12 @@ impl AgentRunner {
                         }
                         // Short execution — return directly
                         tracing::info!("Done after {} round(s) [{:?}]", round + 1, state);
-                        self.persist_conversation(&msg, &text).await?;
+                        self.persist_conversation(msg, &text).await?;
                         return Ok(text);
                     }
                     AgentState::Summarizing | AgentState::Direct | AgentState::Planning => {
                         tracing::info!("Done after {} round(s) [{:?}]", round + 1, state);
-                        self.persist_conversation(&msg, &text).await?;
+                        self.persist_conversation(msg, &text).await?;
                         return Ok(text);
                     }
                 }
@@ -645,7 +645,7 @@ impl AgentRunner {
         }
 
         tracing::warn!("Circuit breaker after {} rounds", CIRCUIT_BREAKER_ROUNDS);
-        self.persist_conversation(&msg, &format!("Hit {} rounds.", CIRCUIT_BREAKER_ROUNDS))
+        self.persist_conversation(msg, &format!("Hit {} rounds.", CIRCUIT_BREAKER_ROUNDS))
             .await?;
         Ok(format!(
             "⚠️ Hit {} rounds ({} compactions). Break into smaller tasks?",

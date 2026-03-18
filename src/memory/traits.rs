@@ -41,6 +41,14 @@ pub struct Chunk {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ConversationSearchHit {
+    pub chat_id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// The core MemoryBackend trait.
 #[async_trait]
 pub trait MemoryBackend: Send + Sync {
@@ -97,6 +105,16 @@ pub trait MemoryBackend: Send + Sync {
         chat_id: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<(String, String)>>;
+
+    async fn search_conversations(
+        &self,
+        query: &str,
+        limit: usize,
+        chat_id: Option<&str>,
+    ) -> anyhow::Result<Vec<ConversationSearchHit>> {
+        let _ = (query, limit, chat_id);
+        Ok(Vec::new())
+    }
 
     /// Get cached sticker description by ID
     async fn get_sticker_cache(&self, sticker_id: &str) -> anyhow::Result<Option<String>>;

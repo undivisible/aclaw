@@ -11,7 +11,7 @@ Scope: entire repository.
 
 ## 1) Project Snapshot
 
-unthinkclaw is a lean, fast Rust AI agent runtime — Telegram-first, trait-driven, SQLite-backed.
+unthinkclaw is a lean, fast Rust AI agent runtime — Telegram-first, trait-driven, and moving toward SurrealDB + RocksDB as the primary state layer.
 
 Goals:
 - Small binary (<10MB), fast startup (<10ms), low RAM (<10MB)
@@ -24,7 +24,7 @@ Key extension points:
 - `src/providers/traits.rs` — AI model providers
 - `src/channels/traits.rs` — messaging channels
 - `src/tools/traits.rs` — tool execution
-- `src/memory/` — SQLite memory backend
+- `src/memory/` — memory backends (SurrealDB + RocksDB target, SQLite fallback)
 
 ## 2) Architecture
 
@@ -37,7 +37,7 @@ src/
   channels/            — Telegram, Discord, Slack, CLI, etc.
   providers/           — Anthropic, OpenAI-compat, Ollama, Copilot
   tools/               — shell, file_ops, web_search, web_fetch, edit, vibemania
-  memory/              — SQLite (FTS5, vector, sticker cache, conversation history)
+  memory/              — Surreal/SQLite backends (history, cache, retrieval)
   swarm.rs             — parallel sub-agent spawning
   cron_scheduler.rs    — scheduled tasks
   heartbeat.rs         — periodic background checks
@@ -53,7 +53,7 @@ src/
 
 ### 3.1 Async-First
 - All I/O must use `tokio` async primitives
-- SQLite calls go through `spawn_blocking` — never block the tokio thread pool
+- SQLite fallback calls go through `spawn_blocking` — never block the tokio thread pool
 - Voice/audio transcription uses `tokio::process::Command`, not `std::process::Command`
 
 ### 3.2 KISS
@@ -76,10 +76,12 @@ src/
 
 ## 4) Key Implementation Notes
 
-### Memory (sqlite.rs)
-- Uses WAL mode + NORMAL sync for performance
-- FTS5 virtual table for full-text search
-- `spawn_blocking` for all DB ops
+### Memory
+- SurrealDB + RocksDB is the intended primary backend direction
+- SQLite remains a fallback/dev path during migration
+- SQLite uses WAL mode + NORMAL sync for performance
+- SQLite FTS5 powers the fallback full-text path
+- SQLite DB ops go through `spawn_blocking`
 - Sticker cache: `sticker_id → description` (avoids re-analysis)
 - Conversation history: last 20 messages per chat_id, loaded on each request
 
@@ -93,7 +95,7 @@ src/
 - Circuit breaker: 50 rounds max
 - Loop detection: hashes identical tool calls
 - Progress channel: receiver is kept alive (not dropped)
-- History: last 20 messages loaded from SQLite, ordered ASC
+- History: last 20 messages loaded from the active backend, ordered ASC
 
 ### Swarm (swarm.rs)
 - Spawns parallel Codex sub-agents via API
@@ -156,10 +158,21 @@ cargo test
 - No blocking calls on async runtime
 - No secrets in commits
 
+## 9.1 Documentation Rules
+
+- Keep root Markdown short, current, and user-facing.
+- Keep planning and migration notes in `docs/`.
+- Rewrite stale speculative docs into concise migration notes instead of letting
+  them drift.
+- Do not keep generated placeholder state as if it were maintained
+  documentation.
+- `CLAUDE.md` should stay aligned with this file; if it is a symlink, update
+  this file and verify the link still resolves.
+
 ## 10) Anti-Patterns (Do Not)
 
 - Do not call `std::process::Command` in async context — use `tokio::process::Command`
-- Do not call SQLite directly from async — use `spawn_blocking`
+- Do not call SQLite fallback directly from async — use `spawn_blocking`
 - Do not drop progress channel receivers
 - Do not use global asterisk counting for markdown — use state machine
 - Do not add heavy dependencies for minor convenience

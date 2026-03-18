@@ -36,21 +36,38 @@ impl EmbeddingProvider for NoopEmbedding {
 // OpenAI provider
 pub struct OpenAiEmbedding {
     client: reqwest::Client,
-    api_key: String,
+    api_key: Option<String>,
     base_url: String,
     model: String,
     dimensions: usize,
 }
 
+pub struct GeminiEmbedding {
+    client: reqwest::Client,
+    api_key: String,
+    model: String,
+    dimensions: usize,
+}
+
+impl GeminiEmbedding {
+    pub fn new(api_key: String, model: Option<String>) -> Self {
+        let model = model.unwrap_or_else(|| "text-embedding-004".to_string());
+        Self {
+            client: reqwest::Client::new(),
+            api_key,
+            model,
+            dimensions: 768,
+        }
+    }
+}
+
 impl OpenAiEmbedding {
-    pub fn new(api_key: String, model: Option<String>, base_url: Option<String>) -> Self {
+    pub fn new(api_key: Option<String>, model: Option<String>, base_url: Option<String>) -> Self {
         let model = model.unwrap_or_else(|| "text-embedding-3-small".to_string());
         let dimensions = if model.contains("text-embedding-3-small") {
             1536
         } else if model.contains("text-embedding-3-large") {
             3072
-        } else if model.contains("ada-002") {
-            1536
         } else {
             1536 // default
         };
@@ -99,11 +116,11 @@ impl EmbeddingProvider for OpenAiEmbedding {
             model: self.model.clone(),
         };
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
+        let mut request_builder = self.client.post(&url).header("Content-Type", "application/json");
+        if let Some(api_key) = &self.api_key {
+            request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
+        }
+        let response = request_builder
             .json(&request)
             .send()
             .await
@@ -124,6 +141,88 @@ impl EmbeddingProvider for OpenAiEmbedding {
     }
 }
 
+#[derive(Serialize)]
+struct GeminiPart {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct GeminiContent {
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Serialize)]
+struct GeminiEmbeddingRequest {
+    model: String,
+    content: GeminiContent,
+}
+
+#[derive(Deserialize)]
+struct GeminiEmbeddingResponse {
+    embedding: Option<GeminiEmbeddingValues>,
+}
+
+#[derive(Deserialize)]
+struct GeminiEmbeddingValues {
+    values: Vec<f32>,
+}
+
+#[async_trait]
+impl EmbeddingProvider for GeminiEmbedding {
+    fn name(&self) -> &str {
+        &self.model
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let mut results = Vec::with_capacity(texts.len());
+        for text in texts {
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:embedContent",
+                self.model
+            );
+            let request = GeminiEmbeddingRequest {
+                model: format!("models/{}", self.model),
+                content: GeminiContent {
+                    parts: vec![GeminiPart {
+                        text: (*text).to_string(),
+                    }],
+                },
+            };
+
+            let response = self
+                .client
+                .post(&url)
+                .header("x-goog-api-key", &self.api_key)
+                .json(&request)
+                .send()
+                .await
+                .context("Failed to send Gemini embedding request")?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                anyhow::bail!("Gemini API error {}: {}", status, body);
+            }
+
+            let response: GeminiEmbeddingResponse = response
+                .json()
+                .await
+                .context("Failed to parse Gemini embedding response")?;
+
+            let values = response
+                .embedding
+                .map(|embedding| embedding.values)
+                .context("Gemini response did not include embedding values")?;
+            results.push(values);
+        }
+        Ok(results)
+    }
+}
+
 // Factory function
 pub fn create_embedding_provider(
     provider_type: &str,
@@ -135,7 +234,17 @@ pub fn create_embedding_provider(
         "noop" | "none" | "keyword" => Ok(Arc::new(NoopEmbedding)),
         "openai" => {
             let api_key = api_key.context("OpenAI API key required")?;
-            Ok(Arc::new(OpenAiEmbedding::new(api_key, model, base_url)))
+            Ok(Arc::new(OpenAiEmbedding::new(Some(api_key), model, base_url)))
+        }
+        "openai_compat" => Ok(Arc::new(OpenAiEmbedding::new(api_key, model, base_url))),
+        "ollama" | "local" => {
+            let model = model.or_else(|| Some("nomic-embed-text".to_string()));
+            let base_url = base_url.or_else(|| Some("http://localhost:11434".to_string()));
+            Ok(Arc::new(OpenAiEmbedding::new(None, model, base_url)))
+        }
+        "gemini" => {
+            let api_key = api_key.context("Gemini API key required")?;
+            Ok(Arc::new(GeminiEmbedding::new(api_key, model)))
         }
         _ => anyhow::bail!("Unknown embedding provider: {}", provider_type),
     }

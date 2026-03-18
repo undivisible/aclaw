@@ -11,7 +11,7 @@ name = "unthinkclaw"
 path = "src/main.rs"
 
 [features]
-default = ["core", "channel-cli", "channel-telegram", "provider-anthropic"]
+default = ["core", "channel-cli", "channel-telegram", "provider-anthropic", "provider-ollama"]
 
 # Core (always needed)
 core = []

@@ -120,6 +120,12 @@ impl Scheduler {
     }
 }
 
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 use std::str::FromStr;
 
 #[cfg(test)]

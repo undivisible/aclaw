@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub name: String,
@@ -10,8 +12,19 @@ pub struct Skill {
     pub location: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagedSkillInput {
+    pub name: String,
+    pub description: String,
+    pub body: String,
+}
+
 /// Scan known skill directories for SKILL.md files
 pub fn discover_skills() -> Vec<Skill> {
+    discover_skills_for_workspace(None)
+}
+
+pub fn discover_skills_for_workspace(workspace: Option<&Path>) -> Vec<Skill> {
     let mut skills = Vec::new();
     let home = dirs::home_dir().unwrap_or_default();
 
@@ -23,7 +36,16 @@ pub fn discover_skills() -> Vec<Skill> {
     let workspace_skills = home.join(".openclaw/workspace/skills");
     scan_skill_dir(&workspace_skills, &mut skills);
 
+    if let Some(workspace) = workspace {
+        let managed = managed_skills_dir(workspace);
+        scan_skill_dir(&managed, &mut skills);
+    }
+
     skills
+}
+
+pub fn managed_skills_dir(workspace: &Path) -> PathBuf {
+    workspace.join(".unthinkclaw/skills")
 }
 
 fn scan_skill_dir(dir: &Path, skills: &mut Vec<Skill>) {
@@ -163,6 +185,27 @@ pub fn match_skill<'a>(skills: &'a [Skill], user_message: &str) -> Option<&'a Sk
 /// Load the full content of a skill's SKILL.md
 pub fn load_skill_content(skill: &Skill) -> Option<String> {
     std::fs::read_to_string(&skill.location).ok()
+}
+
+pub fn save_managed_skill(workspace: &Path, input: &ManagedSkillInput) -> anyhow::Result<PathBuf> {
+    let dir = managed_skills_dir(workspace).join(slugify(&input.name));
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("SKILL.md");
+    let content = format!(
+        "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+        input.name, input.description, input.body
+    );
+    std::fs::write(&path, content)?;
+    Ok(path)
+}
+
+fn slugify(name: &str) -> String {
+    let slug = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    slug.trim_matches('-').to_string()
 }
 
 #[cfg(test)]

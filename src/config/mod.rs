@@ -7,6 +7,7 @@ use std::path::PathBuf;
 #[serde(default)]
 pub struct Config {
     pub provider: ProviderConfig,
+    pub embeddings: EmbeddingsConfig,
     pub model: String,
     pub system_prompt: String,
     pub workspace: PathBuf,
@@ -17,6 +18,7 @@ pub struct Config {
     pub channel: ChannelConfig,
     pub gateway: GatewayConfig,
     pub policy: PolicyConfig,
+    pub toolsets: ToolsetConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,11 +31,32 @@ pub struct ProviderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct EmbeddingsConfig {
+    pub enabled: bool,
+    pub provider: String,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RuntimeConfig {
     pub kind: String, // "native", "docker"
     pub docker_image: Option<String>,
     pub memory_limit_mb: Option<u64>,
     pub state_path: Option<PathBuf>,
+    pub self_update: SelfUpdateConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SelfUpdateConfig {
+    pub enabled: bool,
+    pub interval_secs: u64,
+    pub remote: String,
+    pub branch: String,
+    pub restart_service: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +113,13 @@ pub struct PolicyConfig {
     pub allow_plugin_git: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ToolsetConfig {
+    pub enabled: Vec<String>,
+    pub disabled: Vec<String>,
+}
+
 impl Config {
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
@@ -104,6 +134,7 @@ impl Config {
                 api_key: None,
                 base_url: None,
             },
+            embeddings: EmbeddingsConfig::default(),
             model: "claude-sonnet-4-5".to_string(),
             system_prompt: "You are a helpful AI assistant.".to_string(),
             workspace: PathBuf::from("."),
@@ -113,6 +144,7 @@ impl Config {
                 docker_image: None,
                 memory_limit_mb: None,
                 state_path: None,
+                self_update: SelfUpdateConfig::default(),
             },
             hosting: HostingConfig::default(),
             observability: ObservabilityConfig::default(),
@@ -122,6 +154,7 @@ impl Config {
             },
             gateway: GatewayConfig::default(),
             policy: PolicyConfig::default(),
+            toolsets: ToolsetConfig::default(),
         }
     }
 }
@@ -142,6 +175,18 @@ impl Default for ProviderConfig {
     }
 }
 
+impl Default for EmbeddingsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "noop".to_string(),
+            api_key: None,
+            model: None,
+            base_url: None,
+        }
+    }
+}
+
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
@@ -149,6 +194,19 @@ impl Default for RuntimeConfig {
             docker_image: None,
             memory_limit_mb: None,
             state_path: None,
+            self_update: SelfUpdateConfig::default(),
+        }
+    }
+}
+
+impl Default for SelfUpdateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: 900,
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+            restart_service: Some("unthinkclaw".to_string()),
         }
     }
 }
@@ -156,7 +214,7 @@ impl Default for RuntimeConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            backend: "surreal".to_string(),
+            backend: "auto".to_string(),
             root: PathBuf::from(".unthinkclaw"),
         }
     }

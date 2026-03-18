@@ -6,9 +6,12 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use super::formatting::{chunk_outgoing_text, format_outgoing_text, FormatTarget};
 use super::traits::{Channel, IncomingMessage, OutgoingMessage};
+use crate::memory::MemoryBackend;
 
 /// Telegram message length limit
 const TELEGRAM_MAX_LEN: usize = 4096;
@@ -18,6 +21,7 @@ pub struct TelegramChannel {
     bot_token: String,
     chat_id: i64,
     client: reqwest::Client,
+    memory: Option<Arc<dyn MemoryBackend>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -70,6 +74,14 @@ struct Sticker {
     file_id: String,
     #[serde(default)]
     file_unique_id: String,
+    #[serde(default)]
+    emoji: Option<String>,
+    #[serde(default)]
+    set_name: Option<String>,
+    #[serde(default)]
+    is_animated: bool,
+    #[serde(default)]
+    is_video: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -98,151 +110,19 @@ struct User {
     username: Option<String>,
 }
 
-/// Sanitize Markdown for Telegram's strict parser
-fn sanitize_markdown(text: &str) -> String {
-    let mut result = String::new();
-    let lines: Vec<&str> = text.lines().collect();
-    let mut in_code_block = false;
-    let mut in_table = false;
-
-    for line in lines {
-        let trimmed = line.trim();
-
-        // Track code blocks
-        if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
-            // Ensure code blocks have language specifiers
-            if in_code_block && trimmed == "```" {
-                result.push_str("```text\n");
-                continue;
-            }
-        }
-
-        // Inside code blocks, pass through unchanged
-        if in_code_block {
-            result.push_str(line);
-            result.push('\n');
-            continue;
-        }
-
-        // Strip Markdown headers (Telegram doesn't support them)
-        if trimmed.starts_with('#') {
-            // Convert headers to bold text (Telegram Markdown uses single asterisks)
-            let header_text = trimmed.trim_start_matches('#').trim();
-            if !header_text.is_empty() {
-                result.push_str(&format!("*{}*\n", header_text));
-            }
-            continue;
-        }
-
-        // Detect table rows (contain pipes, not inside code)
-        if trimmed.contains('|') && !trimmed.is_empty() {
-            let cells: Vec<&str> = trimmed
-                .split('|')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            // Skip separator rows (only dashes/spaces)
-            if cells
-                .iter()
-                .all(|c| c.chars().all(|ch| ch == '-' || ch == ' '))
-            {
-                continue;
-            }
-
-            // Convert to bullet list
-            if !cells.is_empty() {
-                in_table = true;
-                result.push_str(&format!("• {}\n", cells.join(" | ")));
-                continue;
-            }
-        } else if in_table && !trimmed.is_empty() {
-            in_table = false;
-        }
-
-        // Pass through other lines unchanged
-        result.push_str(line);
-        result.push('\n');
-    }
-
-    result.trim_end().to_string()
-}
-
-/// Chunk message into pieces under max_len, splitting at paragraph/sentence boundaries
-fn chunk_message(text: &str, max_len: usize) -> Vec<String> {
-    if text.len() <= max_len {
-        return vec![text.to_string()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-
-    // First, try splitting by paragraphs (double newline)
-    let paragraphs: Vec<&str> = text.split("\n\n").collect();
-
-    for para in paragraphs {
-        // If adding this paragraph would exceed limit
-        if current.len() + para.len() + 2 > max_len {
-            // If current is not empty, save it
-            if !current.is_empty() {
-                chunks.push(current.clone());
-                current.clear();
-            }
-
-            // If the paragraph itself is too long, split by sentences
-            if para.len() > max_len {
-                let sentences: Vec<&str> = para.split(". ").collect();
-                for (i, sent) in sentences.iter().enumerate() {
-                    let sentence = if i < sentences.len() - 1 {
-                        format!("{}. ", sent)
-                    } else {
-                        sent.to_string()
-                    };
-
-                    if current.len() + sentence.len() > max_len {
-                        if !current.is_empty() {
-                            chunks.push(current.clone());
-                            current.clear();
-                        }
-                        // If a single sentence is still too long, hard split
-                        if sentence.len() > max_len {
-                            for chunk in sentence.as_bytes().chunks(max_len) {
-                                chunks.push(String::from_utf8_lossy(chunk).to_string());
-                            }
-                        } else {
-                            current = sentence;
-                        }
-                    } else {
-                        current.push_str(&sentence);
-                    }
-                }
-            } else {
-                current = para.to_string();
-            }
-        } else {
-            if !current.is_empty() {
-                current.push_str("\n\n");
-            }
-            current.push_str(para);
-        }
-    }
-
-    // Add remaining
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-
-    chunks
-}
-
 impl TelegramChannel {
     pub fn new(bot_token: String, chat_id: i64) -> Self {
         Self {
             bot_token,
             chat_id,
             client: reqwest::Client::new(),
+            memory: None,
         }
+    }
+
+    pub fn with_memory(mut self, memory: Arc<dyn MemoryBackend>) -> Self {
+        self.memory = Some(memory);
+        self
     }
 
     fn api_url(&self, method: &str) -> String {
@@ -310,11 +190,8 @@ print(text)
 
     /// Send a message and return its message_id (of the last chunk if split)
     pub async fn send_message(&self, text: &str) -> anyhow::Result<i64> {
-        // Sanitize markdown
-        let sanitized = sanitize_markdown(text);
-
-        // Chunk if needed
-        let chunks = chunk_message(&sanitized, TELEGRAM_MAX_LEN);
+        let formatted = format_outgoing_text(FormatTarget::Telegram, text);
+        let chunks = chunk_outgoing_text(FormatTarget::Telegram, &formatted, TELEGRAM_MAX_LEN);
 
         let mut last_msg_id = 0;
 
@@ -361,17 +238,59 @@ print(text)
 
     /// Edit an existing message
     pub async fn edit_message(&self, message_id: i64, text: &str) -> anyhow::Result<()> {
+        let formatted = format_outgoing_text(FormatTarget::Telegram, text);
+        let edit_text = formatted.chars().take(TELEGRAM_MAX_LEN).collect::<String>();
         let _ = self
             .client
             .post(self.api_url("editMessageText"))
             .json(&serde_json::json!({
                 "chat_id": self.chat_id,
                 "message_id": message_id,
-                "text": text,
+                "text": edit_text,
             }))
             .send()
             .await?;
         Ok(())
+    }
+
+    async fn sticker_text(&self, sticker: &Sticker) -> anyhow::Result<String> {
+        if let Some(memory) = &self.memory {
+            if !sticker.file_unique_id.is_empty() {
+                if let Some(cached) = memory.get_sticker_cache(&sticker.file_unique_id).await? {
+                    return Ok(cached);
+                }
+            }
+        }
+
+        let mut parts = vec!["Sticker received".to_string()];
+        if let Some(emoji) = &sticker.emoji {
+            if !emoji.is_empty() {
+                parts.push(format!("emoji {}", emoji));
+            }
+        }
+        if let Some(set_name) = &sticker.set_name {
+            if !set_name.is_empty() {
+                parts.push(format!("set {}", set_name));
+            }
+        }
+        if sticker.is_animated {
+            parts.push("animated".to_string());
+        }
+        if sticker.is_video {
+            parts.push("video".to_string());
+        }
+
+        let description = format!("🎨 {}", parts.join(" • "));
+
+        if let Some(memory) = &self.memory {
+            if !sticker.file_unique_id.is_empty() {
+                let _ = memory
+                    .store_sticker_cache(&sticker.file_unique_id, &sticker.file_id, &description)
+                    .await;
+            }
+        }
+
+        Ok(description)
     }
 
     /// Delete a message
@@ -434,12 +353,14 @@ impl Channel for TelegramChannel {
         let bot_token = self.bot_token.clone();
         let chat_id = self.chat_id;
         let client = self.client.clone();
+        let memory = self.memory.clone();
 
         tokio::spawn(async move {
             let ch = TelegramChannel {
                 bot_token,
                 chat_id,
                 client,
+                memory,
             };
             let mut offset = 0;
             loop {
@@ -461,9 +382,10 @@ impl Channel for TelegramChannel {
                                     "📍 Location: {}, {} (https://maps.google.com/?q={},{})",
                                     loc.latitude, loc.longitude, loc.latitude, loc.longitude
                                 )
-                            } else if let Some(_sticker) = &msg.sticker {
-                                // Sticker: just note it was received
-                                "🎨 Sticker received".to_string()
+                            } else if let Some(sticker) = &msg.sticker {
+                                ch.sticker_text(sticker)
+                                    .await
+                                    .unwrap_or_else(|_| "🎨 Sticker received".to_string())
                             } else if let Some(voice) = &msg.voice {
                                 // Voice: transcribe with faster-whisper
                                 ch.transcribe_voice(&voice.file_id)
@@ -517,5 +439,36 @@ impl Channel for TelegramChannel {
 
     async fn stop(&mut self) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::sqlite::SqliteMemory;
+
+    #[tokio::test]
+    async fn sticker_cache_is_used_when_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("memory.db");
+        let memory: Arc<dyn MemoryBackend> =
+            Arc::new(SqliteMemory::new(&db_path.to_string_lossy()).unwrap());
+        memory
+            .store_sticker_cache("uniq-1", "file-1", "🎨 cached sticker")
+            .await
+            .unwrap();
+
+        let channel = TelegramChannel::new("token".to_string(), 1).with_memory(memory);
+        let sticker = Sticker {
+            file_id: "file-1".to_string(),
+            file_unique_id: "uniq-1".to_string(),
+            emoji: Some("🙂".to_string()),
+            set_name: Some("test_set".to_string()),
+            is_animated: false,
+            is_video: false,
+        };
+
+        let text = channel.sticker_text(&sticker).await.unwrap();
+        assert_eq!(text, "🎨 cached sticker");
     }
 }

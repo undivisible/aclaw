@@ -14,6 +14,12 @@ impl CliChannel {
     }
 }
 
+impl Default for CliChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl Channel for CliChannel {
     fn name(&self) -> &str {

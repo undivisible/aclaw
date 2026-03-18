@@ -22,6 +22,12 @@ impl WebSearchTool {
     }
 }
 
+impl Default for WebSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Deserialize)]
 struct SearchArgs {
     query: String,

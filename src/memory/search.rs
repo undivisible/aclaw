@@ -2,6 +2,9 @@
 //! Provides memory_search and memory_get as agent tools.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::memory::MemoryBackend;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -9,6 +12,10 @@ pub struct SearchResult {
     pub line_number: usize,
     pub snippet: String,
     pub score: f32,
+}
+
+fn truncate_text(input: &str, max_chars: usize) -> String {
+    input.chars().take(max_chars).collect()
 }
 
 /// Search MEMORY.md + memory/*.md for a query string
@@ -32,7 +39,7 @@ pub fn memory_search(workspace: &Path, query: &str, max_results: usize) -> Vec<S
         if let Ok(entries) = std::fs::read_dir(&memory_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |e| e == "md") {
+                if path.extension().is_some_and(|e| e == "md") {
                     files.push(path);
                 }
             }
@@ -194,6 +201,73 @@ impl Tool for MemorySearchTool {
 /// Tool: memory_get — read lines from a memory file.
 pub struct MemoryGetTool {
     workspace: PathBuf,
+}
+
+pub struct SessionSearchTool {
+    memory: Arc<dyn MemoryBackend>,
+}
+
+impl SessionSearchTool {
+    pub fn new(memory: Arc<dyn MemoryBackend>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for SessionSearchTool {
+    fn name(&self) -> &str {
+        "session_search"
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "session_search".to_string(),
+            description: "Search persisted conversation history across sessions or within a specific chat_id.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query" },
+                    "limit": { "type": "integer", "description": "Maximum results (default 10)" },
+                    "chat_id": { "type": "string", "description": "Optional chat/session identifier to restrict the search" }
+                },
+                "required": ["query"]
+            }),
+        }
+    }
+
+    async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
+        let args: serde_json::Value = serde_json::from_str(arguments)?;
+        let query = args["query"].as_str().unwrap_or("");
+        let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+        let chat_id = args["chat_id"].as_str();
+
+        if query.is_empty() {
+            return Ok(ToolResult::error("Query is required"));
+        }
+
+        let results = self
+            .memory
+            .search_conversations(query, limit, chat_id)
+            .await?;
+        if results.is_empty() {
+            return Ok(ToolResult::success("No matching conversation history."));
+        }
+
+        let output = results
+            .iter()
+            .map(|hit| {
+                format!(
+                    "{} [{}] {} — {}",
+                    hit.chat_id,
+                    hit.role,
+                    hit.created_at.to_rfc3339(),
+                    truncate_text(&hit.content.replace('\n', " | "), 160)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(ToolResult::success(output))
+    }
 }
 
 impl MemoryGetTool {

@@ -89,6 +89,12 @@ impl ListModelsTool {
     }
 }
 
+impl Default for ListModelsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl Tool for ListModelsTool {
     fn name(&self) -> &str {

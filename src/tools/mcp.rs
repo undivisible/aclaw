@@ -16,6 +16,12 @@ impl McpTool {
     }
 }
 
+impl Default for McpTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Deserialize)]
 struct McpArgs {
     /// Action: run (coding session), list_tools

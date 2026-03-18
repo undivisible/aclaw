@@ -127,6 +127,12 @@ impl BrowserTool {
     }
 }
 
+impl Default for BrowserTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct AgentBrowserResponse {
     success: bool,
@@ -402,8 +408,7 @@ fn extract_host(url: &str) -> anyhow::Result<String> {
 /// Check if host matches allowlist (supports wildcards like *.example.com)
 fn host_matches_allowlist(host: &str, allowlist: &[String]) -> bool {
     for pattern in allowlist {
-        if pattern.starts_with("*.") {
-            let suffix = &pattern[2..];
+        if let Some(suffix) = pattern.strip_prefix("*.") {
             if host.ends_with(suffix) || host == suffix {
                 return true;
             }

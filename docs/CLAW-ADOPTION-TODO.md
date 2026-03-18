@@ -2,6 +2,18 @@
 
 Purpose: turn the cross-repo review into an execution backlog for `unthinkclaw`.
 
+Verified snapshot on 2026-03-18:
+- validation passes:
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test`
+  - `cargo build --release`
+- GitHub issues `#2` through `#6` are resolved and closed
+- Hermes-style foundations landed:
+  - toolset filtering
+  - session search primitives
+  - managed skill persistence
+  - Daytona runtime scaffold
+
 Status key:
 - `[ ]` not started
 - `[-]` in progress
@@ -25,6 +37,10 @@ Status key:
 - [x] SQLite memory now has pooled concurrency and FTS-first search
 - [x] SurrealDB + RocksDB memory backend exists and is preferred in swarm builds
 - [x] Prompt loading moved to async
+- [x] Toolset-based tool exposure filtering exists
+- [x] Session search primitives exist across current memory backends
+- [x] Managed skill persistence exists
+- [x] Daytona runtime scaffold exists
 
 ## ZeroClaw Adoption
 
@@ -174,7 +190,7 @@ Focus: manager/worker topology, human-visible swarm operation, centralized crede
 
 This is the most important architectural track.
 
-- [ ] Make SurrealDB + RocksDB the default memory backend, not only the swarm-preferred backend.
+- [-] Make SurrealDB + RocksDB the default memory backend, not only the swarm-preferred backend.
 - [ ] Define a single storage abstraction that covers:
   - long-term memory
   - conversation history
@@ -183,8 +199,8 @@ This is the most important architectural track.
   - swarm mailbox
   - scheduled jobs
   - gateway/session metadata
-- [ ] Port current SQLite-only data paths to the unified backend.
-- [ ] Keep SQLite only as:
+- [-] Port current SQLite-only data paths to the unified backend.
+- [-] Keep SQLite only as:
   - test/dev fallback, or
   - optional lightweight mode
 - [ ] Add migration tooling from SQLite to SurrealDB.
@@ -263,16 +279,21 @@ This is the most important architectural track.
 
 ## Suggested Execution Order
 
-- [ ] Phase 1: gateway audit + dangerous-tool registry + doctor command
-- [ ] Phase 2: SurrealDB as default memory backend + backend migration tooling
-- [ ] Phase 3: compaction v2 + persistent todo/task tools + richer session state
-- [ ] Phase 4: swarm task board + mailbox + delegation permissions
-- [ ] Phase 5: quality gates + observer/metrics/tracing
-- [ ] Phase 6: optional isolated worker runtime + distributed manager/worker mode
+- [x] Phase 1: gateway audit + dangerous-tool registry + doctor command
+- [-] Phase 2: SurrealDB as default memory backend + backend migration tooling
+- [-] Phase 3: Hermes-style foundations in Rust:
+  - toolsets
+  - session search
+  - managed skills
+  - runtime adapter scaffolding
+- [ ] Phase 4: compaction v2 + persistent todo/task tools + richer session state
+- [ ] Phase 5: swarm task board + mailbox + delegation permissions
+- [ ] Phase 6: quality gates + observer/metrics/tracing
+- [ ] Phase 7: optional isolated worker runtime + distributed manager/worker mode
 
 ## Decisions Needed
 
-- [!] Should SQLite remain supported long-term as a lightweight mode, or be fully demoted to migration/test-only?
+- [!] Should SQLite remain supported long-term as a lightweight mode, or be fully demoted to migration/test-only after Surreal parity is complete?
 - [!] Should swarm coordination live entirely in SurrealDB, or should some high-contention paths use a separate fast queue/cache?
 - [!] Should the first quality-gate implementation be local command-based only, or include agent-evaluator loops from the start?
 - [!] Should manager/worker mode be introduced before or after Surreal becomes the primary backend?

@@ -61,7 +61,7 @@ impl Tool for VibemaniaTool {
         let vibemania_bin = self
             .workspace
             .parent()
-            .and_then(|p| Some(p.join("vibemania/target/release/vibemania")))
+            .map(|p| p.join("vibemania/target/release/vibemania"))
             .filter(|p| p.exists());
 
         if vibemania_bin.is_none() {
@@ -70,7 +70,7 @@ impl Tool for VibemaniaTool {
             ));
         }
 
-        let parallel = args.parallel.max(1).min(8);
+        let parallel = args.parallel.clamp(1, 8);
 
         // Spawn vibemania process
         let output = tokio::process::Command::new("bash")

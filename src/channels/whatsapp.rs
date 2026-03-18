@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use super::formatting::{format_outgoing_text, FormatTarget};
 use super::traits::*;
 
 pub struct WhatsAppChannel {
@@ -142,13 +143,14 @@ impl Channel for WhatsAppChannel {
 
     async fn send(&self, message: OutgoingMessage) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
+        let formatted = format_outgoing_text(FormatTarget::WhatsApp, &message.text);
 
         let body = serde_json::json!({
             "messaging_product": "whatsapp",
             "to": &message.chat_id,
             "type": "text",
             "text": {
-                "body": &message.text
+                "body": formatted
             }
         });
 

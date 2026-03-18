@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use super::retry::send_with_retry;
 use super::traits::*;
 
 pub struct OllamaProvider {
@@ -15,8 +16,10 @@ impl OllamaProvider {
             base_url: base_url.into(),
         }
     }
+}
 
-    pub fn default() -> Self {
+impl Default for OllamaProvider {
+    fn default() -> Self {
         Self::new("http://localhost:11434")
     }
 }
@@ -54,11 +57,13 @@ impl Provider for OllamaProvider {
             }
         });
 
-        let resp = client
-            .post(format!("{}/api/chat", self.base_url))
-            .json(&body)
-            .send()
-            .await?;
+        let resp = send_with_retry(
+            client
+                .post(format!("{}/api/chat", self.base_url))
+                .json(&body),
+            self.name(),
+        )
+        .await?;
 
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();

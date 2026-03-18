@@ -1,6 +1,7 @@
 //! Channel abstraction — communication interfaces
 //! Enable only what you need via Cargo features.
 
+pub mod formatting;
 pub mod traits;
 
 // Core channels (always available or feature-gated)

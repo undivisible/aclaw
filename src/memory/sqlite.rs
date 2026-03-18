@@ -352,6 +352,62 @@ impl MemoryBackend for SqliteMemory {
         Ok(history)
     }
 
+    async fn search_conversations(
+        &self,
+        query: &str,
+        limit: usize,
+        chat_id: Option<&str>,
+    ) -> anyhow::Result<Vec<ConversationSearchHit>> {
+        let query = format!("%{}%", query.to_lowercase());
+        let chat_id = chat_id.map(|value| value.to_string());
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<ConversationSearchHit>> {
+            let guard = pool.connections[index].lock();
+            let parse_hit = |row: &rusqlite::Row| -> rusqlite::Result<ConversationSearchHit> {
+                let created_at: String = row.get(3)?;
+                Ok(ConversationSearchHit {
+                    chat_id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                })
+            };
+
+            let rows = if let Some(chat_id) = chat_id {
+                let mut stmt = guard.prepare(
+                    "SELECT chat_id, role, content, timestamp
+                     FROM conversations
+                     WHERE chat_id = ?1 AND lower(content) LIKE ?2
+                     ORDER BY id DESC
+                     LIMIT ?3",
+                )?;
+                let rows = stmt
+                    .query_map(rusqlite::params![chat_id, query, limit], parse_hit)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                rows
+            } else {
+                let mut stmt = guard.prepare(
+                    "SELECT chat_id, role, content, timestamp
+                     FROM conversations
+                     WHERE lower(content) LIKE ?1
+                     ORDER BY id DESC
+                     LIMIT ?2",
+                )?;
+                let rows = stmt
+                    .query_map(rusqlite::params![query, limit], parse_hit)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                rows
+            };
+            Ok(rows)
+        })
+        .await?
+    }
+
     async fn get_sticker_cache(&self, sticker_id: &str) -> anyhow::Result<Option<String>> {
         let sid = sticker_id.to_string();
         let pool = Arc::clone(&self.pool);
@@ -483,7 +539,8 @@ impl MemoryBackend for SqliteMemory {
                 rusqlite::params![p, h],
             )?;
             Ok(())
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 
@@ -493,9 +550,8 @@ impl MemoryBackend for SqliteMemory {
         let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<Option<FileIndex>> {
             let guard = pool.connections[index].lock();
-            let mut stmt = guard.prepare(
-                "SELECT path, hash, last_indexed FROM files WHERE path = ?1"
-            )?;
+            let mut stmt =
+                guard.prepare("SELECT path, hash, last_indexed FROM files WHERE path = ?1")?;
             Ok(stmt
                 .query_row(rusqlite::params![p], |row| {
                     let created_str: String = row.get(2)?;
@@ -509,7 +565,8 @@ impl MemoryBackend for SqliteMemory {
                     })
                 })
                 .ok())
-        }).await?
+        })
+        .await?
     }
 
     // ── Code chunks ──
@@ -524,7 +581,8 @@ impl MemoryBackend for SqliteMemory {
     ) -> anyhow::Result<()> {
         let fp = file_path.to_string();
         let c = content.to_string();
-        let blob: Option<Vec<u8>> = embedding.map(|e| e.iter().flat_map(|f| f.to_le_bytes()).collect());
+        let blob: Option<Vec<u8>> =
+            embedding.map(|e| e.iter().flat_map(|f| f.to_le_bytes()).collect());
         let pool = Arc::clone(&self.pool);
         let index = self.connection_index();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -546,7 +604,7 @@ impl MemoryBackend for SqliteMemory {
             let guard = pool.connections[index].lock();
             let mut stmt = guard.prepare(
                 "SELECT file_path, start_line, end_line, content, embedding, created_at
-                 FROM chunks WHERE file_path = ?1 ORDER BY start_line ASC"
+                 FROM chunks WHERE file_path = ?1 ORDER BY start_line ASC",
             )?;
             let rows: Vec<Chunk> = stmt
                 .query_map(rusqlite::params![fp], |row| {
@@ -572,7 +630,8 @@ impl MemoryBackend for SqliteMemory {
                 .filter_map(|r| r.ok())
                 .collect();
             Ok(rows)
-        }).await?
+        })
+        .await?
     }
 
     async fn delete_chunks_for_file(&self, file_path: &str) -> anyhow::Result<()> {
@@ -586,7 +645,8 @@ impl MemoryBackend for SqliteMemory {
                 rusqlite::params![fp],
             )?;
             Ok(())
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 }

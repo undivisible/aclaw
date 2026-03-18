@@ -181,14 +181,15 @@ impl MemoryBackend for SurrealMemory {
 
     async fn search(&self, namespace: &str, query: &str, limit: usize) -> Result<Vec<MemoryEntry>> {
         // Try full-text search with BM25 ranking first
-        let mut result = self.db
+        let mut result = self
+            .db
             .query(
                 "SELECT *, search::score(1) AS score
                  FROM memories
                  WHERE namespace = $namespace
                    AND value @1@ $query
                  ORDER BY score DESC
-                 LIMIT $limit"
+                 LIMIT $limit",
             )
             .bind(("namespace", namespace.to_string()))
             .bind(("query", query.to_string()))
@@ -319,6 +320,50 @@ impl MemoryBackend for SurrealMemory {
             .collect())
     }
 
+    async fn search_conversations(
+        &self,
+        query: &str,
+        limit: usize,
+        chat_id: Option<&str>,
+    ) -> Result<Vec<ConversationSearchHit>> {
+        let query = query.to_lowercase();
+        let mut result = if let Some(chat_id) = chat_id {
+            self.db
+                .query(
+                    "SELECT * FROM conversations
+                     WHERE chat_id = $chat_id
+                       AND string::lowercase(content) CONTAINS $query
+                     ORDER BY seq DESC
+                     LIMIT $limit",
+                )
+                .bind(("chat_id", chat_id.to_string()))
+                .bind(("query", query))
+                .bind(("limit", limit as i64))
+                .await?
+        } else {
+            self.db
+                .query(
+                    "SELECT * FROM conversations
+                     WHERE string::lowercase(content) CONTAINS $query
+                     ORDER BY seq DESC
+                     LIMIT $limit",
+                )
+                .bind(("query", query))
+                .bind(("limit", limit as i64))
+                .await?
+        };
+        let rows: Vec<ConversationRow> = result.take(0)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ConversationSearchHit {
+                chat_id: row.chat_id,
+                role: row.role,
+                content: row.content,
+                created_at: parse_timestamp(&row.created_at),
+            })
+            .collect())
+    }
+
     async fn get_sticker_cache(&self, sticker_id: &str) -> Result<Option<String>> {
         let row: Option<StickerRow> = self.db.select(("sticker_cache", sticker_id)).await?;
         Ok(row.map(|entry| entry.description))
@@ -374,7 +419,8 @@ impl MemoryBackend for SurrealMemory {
         // Load all embeddings for the namespace and do cosine search in-process.
         // SurrealDB v2 doesn't have built-in ANN yet — the HNSW index handles
         // this at a higher layer. This is the raw storage fallback.
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT * FROM embeddings WHERE namespace = $namespace")
             .bind(("namespace", namespace.to_string()))
             .await?;
@@ -449,10 +495,9 @@ impl MemoryBackend for SurrealMemory {
     }
 
     async fn get_chunks_for_file(&self, file_path: &str) -> Result<Vec<Chunk>> {
-        let mut result = self.db
-            .query(
-                "SELECT * FROM chunks WHERE file_path = $file_path ORDER BY start_line ASC"
-            )
+        let mut result = self
+            .db
+            .query("SELECT * FROM chunks WHERE file_path = $file_path ORDER BY start_line ASC")
             .bind(("file_path", file_path.to_string()))
             .await?;
         let rows: Vec<ChunkRow> = result.take(0)?;
@@ -559,7 +604,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = SurrealMemory::new(dir.path()).await.unwrap();
 
-        mem.store("test", "greeting", "hello world", None).await.unwrap();
+        mem.store("test", "greeting", "hello world", None)
+            .await
+            .unwrap();
         let val = mem.recall("test", "greeting").await.unwrap();
         assert!(val.is_some());
         assert_eq!(val.unwrap().value, "hello world");
@@ -579,8 +626,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = SurrealMemory::new(dir.path()).await.unwrap();
 
-        mem.store("ns", "k1", "the quick brown fox", None).await.unwrap();
-        mem.store("ns", "k2", "lazy dog sleeps", None).await.unwrap();
+        mem.store("ns", "k1", "the quick brown fox", None)
+            .await
+            .unwrap();
+        mem.store("ns", "k2", "lazy dog sleeps", None)
+            .await
+            .unwrap();
         mem.store("ns", "k3", "fox runs fast", None).await.unwrap();
 
         let results: Vec<MemoryEntry> = mem.search("ns", "fox", 10).await.unwrap();
@@ -605,12 +656,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = SurrealMemory::new(dir.path()).await.unwrap();
 
-        mem.store_conversation("chat-1", "user-1", "user", "Hello").await.unwrap();
+        mem.store_conversation("chat-1", "user-1", "user", "Hello")
+            .await
+            .unwrap();
         // Small delay to ensure different seq timestamps
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        mem.store_conversation("chat-1", "assistant", "assistant", "Hi there").await.unwrap();
+        mem.store_conversation("chat-1", "assistant", "assistant", "Hi there")
+            .await
+            .unwrap();
 
-        let history: Vec<(String, String)> = mem.get_conversation_history("chat-1", 10).await.unwrap();
+        let history: Vec<(String, String)> =
+            mem.get_conversation_history("chat-1", 10).await.unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].1, "Hello");
         assert_eq!(history[1].1, "Hi there");
@@ -625,9 +681,15 @@ mod tests {
         let vec2 = vec![0.0, 1.0, 0.0];
         let vec3 = vec![0.9, 0.1, 0.0];
 
-        mem.store_embedding("ns", "e1", &vec1, "first").await.unwrap();
-        mem.store_embedding("ns", "e2", &vec2, "second").await.unwrap();
-        mem.store_embedding("ns", "e3", &vec3, "third").await.unwrap();
+        mem.store_embedding("ns", "e1", &vec1, "first")
+            .await
+            .unwrap();
+        mem.store_embedding("ns", "e2", &vec2, "second")
+            .await
+            .unwrap();
+        mem.store_embedding("ns", "e3", &vec3, "third")
+            .await
+            .unwrap();
 
         let results = mem.search_embeddings("ns", &vec1, 2).await.unwrap();
         assert!(!results.is_empty());
@@ -640,7 +702,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = SurrealMemory::new(dir.path()).await.unwrap();
 
-        mem.store_file_index("/src/main.rs", "abc123").await.unwrap();
+        mem.store_file_index("/src/main.rs", "abc123")
+            .await
+            .unwrap();
         let idx = mem.get_file_index("/src/main.rs").await.unwrap();
         assert!(idx.is_some());
         assert_eq!(idx.unwrap().hash, "abc123");
@@ -654,8 +718,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = SurrealMemory::new(dir.path()).await.unwrap();
 
-        mem.store_chunk("/src/lib.rs", 1, 10, "fn main() {}", None).await.unwrap();
-        mem.store_chunk("/src/lib.rs", 11, 20, "fn helper() {}", None).await.unwrap();
+        mem.store_chunk("/src/lib.rs", 1, 10, "fn main() {}", None)
+            .await
+            .unwrap();
+        mem.store_chunk("/src/lib.rs", 11, 20, "fn helper() {}", None)
+            .await
+            .unwrap();
 
         let chunks = mem.get_chunks_for_file("/src/lib.rs").await.unwrap();
         assert_eq!(chunks.len(), 2);
@@ -672,7 +740,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = SurrealMemory::new(dir.path()).await.unwrap();
 
-        mem.store_sticker_cache("stk-1", "file-1", "A happy cat").await.unwrap();
+        mem.store_sticker_cache("stk-1", "file-1", "A happy cat")
+            .await
+            .unwrap();
         let desc: Option<String> = mem.get_sticker_cache("stk-1").await.unwrap();
         assert_eq!(desc, Some("A happy cat".to_string()));
 

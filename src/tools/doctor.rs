@@ -15,6 +15,12 @@ impl DoctorTool {
     }
 }
 
+impl Default for DoctorTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Deserialize)]
 struct DoctorArgs {
     #[serde(default)]

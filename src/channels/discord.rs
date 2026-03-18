@@ -4,6 +4,7 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+use super::formatting::{format_outgoing_text, FormatTarget};
 use super::traits::{Channel, IncomingMessage, OutgoingMessage};
 
 #[derive(Clone)]
@@ -22,6 +23,7 @@ impl DiscordChannel {
 
     /// Send message to Discord
     async fn send_message(&self, text: &str) -> anyhow::Result<()> {
+        let formatted = format_outgoing_text(FormatTarget::Discord, text);
         let url = format!(
             "https://discordapp.com/api/channels/{}/messages",
             self.channel_id
@@ -30,7 +32,7 @@ impl DiscordChannel {
             .post(&url)
             .header("Authorization", format!("Bot {}", self.bot_token))
             .json(&serde_json::json!({
-                "content": text,
+                "content": formatted,
             }))
             .send()
             .await?;

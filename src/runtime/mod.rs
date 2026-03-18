@@ -1,5 +1,6 @@
 //! Runtime abstraction — execution environments.
 
+pub mod daytona;
 #[cfg(feature = "docker")]
 pub mod docker;
 pub mod native;

@@ -4,6 +4,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use super::retry::send_with_retry;
 use super::traits::*;
 use crate::cost::{CostTracker, TokenUsage};
 use crate::tools::ToolSpec;
@@ -228,7 +229,7 @@ impl Provider for AnthropicProvider {
                 .header("anthropic-beta", "prompt-caching-2024-07-31");
         }
 
-        let resp = req_builder.json(&body).send().await?;
+        let resp = send_with_retry(req_builder.json(&body), self.name()).await?;
 
         if !resp.status().is_success() {
             let status = resp.status();

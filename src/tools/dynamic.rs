@@ -10,7 +10,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::traits::*;
@@ -43,7 +43,7 @@ struct DynamicToolSpec {
 
 impl DynamicTool {
     /// Load a dynamic tool from its directory
-    pub fn load(dir: &PathBuf, policy: Arc<ExecutionPolicy>) -> Option<Self> {
+    pub fn load(dir: &Path, policy: Arc<ExecutionPolicy>) -> Option<Self> {
         let spec_path = dir.join("spec.json");
         let spec_str = std::fs::read_to_string(&spec_path).ok()?;
         let spec: DynamicToolSpec = serde_json::from_str(&spec_str).ok()?;
@@ -63,7 +63,7 @@ impl DynamicTool {
             name: spec.name,
             description: spec.description,
             parameters: spec.parameters,
-            tool_dir: dir.clone(),
+            tool_dir: dir.to_path_buf(),
             language,
             policy,
         })
@@ -338,6 +338,12 @@ pub struct ListCustomToolsTool;
 impl ListCustomToolsTool {
     pub fn new() -> Self {
         Self
+    }
+}
+
+impl Default for ListCustomToolsTool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
