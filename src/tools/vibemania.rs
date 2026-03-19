@@ -72,16 +72,15 @@ impl Tool for VibemaniaTool {
 
         let parallel = args.parallel.clamp(1, 8);
 
-        // Spawn vibemania process
-        let output = tokio::process::Command::new("bash")
-            .arg("-c")
-            .arg(format!(
-                "cd {} && {} run \"{}\" --parallel {}",
-                self.workspace.display(),
-                vibemania_bin.unwrap().display(),
-                &args.goal,
-                parallel
-            ))
+        let vibemania_bin = vibemania_bin.expect("checked above");
+
+        // Spawn vibemania directly instead of shelling out through bash.
+        let output = tokio::process::Command::new(vibemania_bin)
+            .current_dir(&self.workspace)
+            .arg("run")
+            .arg(&args.goal)
+            .arg("--parallel")
+            .arg(parallel.to_string())
             .output()
             .await?;
 
