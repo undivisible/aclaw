@@ -19,21 +19,28 @@ impl FileReadTool {
         Self { workspace }
     }
 
-    fn resolve_path(&self, path: &str) -> PathBuf {
-        if path.starts_with('/') || path.starts_with('~') {
-            let expanded = if path.starts_with('~') {
-                path.replacen(
-                    '~',
-                    &std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()),
-                    1,
-                )
-            } else {
-                path.to_string()
-            };
-            PathBuf::from(expanded)
+    fn resolve_path(&self, path: &str) -> anyhow::Result<PathBuf> {
+        let path = path.trim();
+        let requested = if path.starts_with('/') {
+            PathBuf::from(path)
+        } else if path.starts_with('~') {
+            anyhow::bail!("Home directory expansion (~) is disabled for security.");
         } else {
             self.workspace.join(path)
+        };
+
+        // Canonicalize to resolve .. and symlinks
+        let canonical_workspace = self
+            .workspace
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace.clone());
+        let canonical_requested = requested.canonicalize().unwrap_or(requested);
+
+        if !canonical_requested.starts_with(&canonical_workspace) {
+            anyhow::bail!("Access denied: path '{}' is outside the workspace.", path);
         }
+
+        Ok(canonical_requested)
     }
 }
 
@@ -81,7 +88,10 @@ impl Tool for FileReadTool {
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
         let args: ReadArgs = serde_json::from_str(arguments)?;
-        let full_path = self.resolve_path(&args.path);
+        let full_path = match self.resolve_path(&args.path) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::error(e.to_string())),
+        };
 
         match tokio::fs::read_to_string(&full_path).await {
             Ok(content) => {
@@ -135,21 +145,42 @@ impl FileWriteTool {
         Self { workspace }
     }
 
-    fn resolve_path(&self, path: &str) -> PathBuf {
-        if path.starts_with('/') || path.starts_with('~') {
-            let expanded = if path.starts_with('~') {
-                path.replacen(
-                    '~',
-                    &std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()),
-                    1,
-                )
-            } else {
-                path.to_string()
-            };
-            PathBuf::from(expanded)
+    fn resolve_path(&self, path: &str) -> anyhow::Result<PathBuf> {
+        let path = path.trim();
+        let requested = if path.starts_with('/') {
+            PathBuf::from(path)
+        } else if path.starts_with('~') {
+            anyhow::bail!("Home directory expansion (~) is disabled for security.");
         } else {
             self.workspace.join(path)
+        };
+
+        // For writing, we can't always canonicalize the file if it doesn't exist yet,
+        // so we canonicalize the parent.
+        let canonical_workspace = self
+            .workspace
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace.clone());
+
+        // Use components to check for .. traversal if file doesn't exist
+        let mut normalized = canonical_workspace.clone();
+        for component in requested.components() {
+            match component {
+                std::path::Component::Normal(c) => normalized.push(c),
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+                | std::path::Component::CurDir => {}
+            }
         }
+
+        if !normalized.starts_with(&canonical_workspace) {
+            anyhow::bail!("Access denied: path '{}' is outside the workspace.", path);
+        }
+
+        Ok(normalized)
     }
 }
 
@@ -189,7 +220,10 @@ impl Tool for FileWriteTool {
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
         let args: WriteArgs = serde_json::from_str(arguments)?;
-        let full_path = self.resolve_path(&args.path);
+        let full_path = match self.resolve_path(&args.path) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::error(e.to_string())),
+        };
 
         // Create parent directories
         if let Some(parent) = full_path.parent() {

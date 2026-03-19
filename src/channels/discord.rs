@@ -56,8 +56,9 @@ impl Channel for DiscordChannel {
         Ok(rx)
     }
 
-    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<()> {
-        self.send_message(&message.text).await
+    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<Option<String>> {
+        self.send_message(&message.text).await?;
+        Ok(None)
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {

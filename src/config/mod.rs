@@ -8,6 +8,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub provider: ProviderConfig,
     pub embeddings: EmbeddingsConfig,
+    pub agent: AgentConfig,
     pub model: String,
     pub system_prompt: String,
     pub workspace: PathBuf,
@@ -37,6 +38,36 @@ pub struct EmbeddingsConfig {
     pub api_key: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    /// Hard circuit breaker (absolute max execution rounds)
+    pub max_rounds: usize,
+    /// Max conversation history (prevents context overflow)
+    pub max_history_messages: usize,
+    /// Max chars for a single tool result
+    pub max_tool_result_chars: usize,
+    /// Max context chars before triggering mid-loop compaction
+    pub max_context_chars: usize,
+    /// Fast/cheap model for planning + summarization
+    pub fast_model: String,
+    /// Heavy model for complex coding/reasoning
+    pub heavy_model: String,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            max_rounds: 50,
+            max_history_messages: 10,
+            max_tool_result_chars: 20_000,
+            max_context_chars: 150_000,
+            fast_model: "claude-haiku-4-5".to_string(),
+            heavy_model: "claude-opus-4".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +166,7 @@ impl Config {
                 base_url: None,
             },
             embeddings: EmbeddingsConfig::default(),
+            agent: AgentConfig::default(),
             model: "claude-sonnet-4-5".to_string(),
             system_prompt: "You are a helpful AI assistant.".to_string(),
             workspace: PathBuf::from("."),

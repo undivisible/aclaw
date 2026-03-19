@@ -5,5 +5,5 @@
 pub mod loop_runner;
 pub mod streaming;
 
-pub use loop_runner::{AgentRunner, ProgressUpdate};
+pub use loop_runner::AgentRunner;
 pub use streaming::{stream_channel, StreamChunk, StreamReceiver, StreamSender};

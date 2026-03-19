@@ -2,9 +2,9 @@
 //! Pure Rust implementation — no external deps.
 //! Hierarchical Navigable Small World graph for ANN search.
 
-use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswNode {
@@ -19,10 +19,10 @@ pub struct HnswIndex {
     pub nodes: Vec<HnswNode>,
     pub entry_point: Option<usize>,
     pub max_layers: usize,
-    pub m: usize,        // max connections per layer
-    pub m_max0: usize,   // max connections at layer 0
+    pub m: usize,      // max connections per layer
+    pub m_max0: usize, // max connections at layer 0
     pub ef_construction: usize,
-    pub ml: f64,         // normalization factor
+    pub ml: f64, // normalization factor
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,13 +35,16 @@ impl Eq for Candidate {}
 
 impl PartialOrd for Candidate {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        other.dist.partial_cmp(&self.dist) // min-heap
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+        other
+            .dist
+            .partial_cmp(&self.dist)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -72,45 +75,22 @@ impl HnswIndex {
     pub fn insert(&mut self, vector: Vec<f32>, label: String) -> usize {
         let id = self.nodes.len();
         let level = self.random_level();
-        
-        let mut node = HnswNode {
-            id,
-            vector: vector.clone(),
-            label,
-            layers: vec![Vec::new(); level + 1],
-        };
+        let mut neighbors_by_layer = Vec::new();
 
         if let Some(ep) = self.entry_point {
             let mut curr_ep = vec![ep];
             let max_layer = self.nodes[ep].layers.len() - 1;
 
-            // Traverse from top to level+1
+            // Traverse from top down to level+1
             for lc in (level + 1..=max_layer).rev() {
                 curr_ep = self.search_layer(&vector, &curr_ep, 1, lc);
             }
 
-            // Insert at each layer from min(level, max_layer) down to 0
+            // Collect neighbors for each layer from level down to 0
             for lc in (0..=level.min(max_layer)).rev() {
                 let candidates = self.search_layer(&vector, &curr_ep, self.ef_construction, lc);
                 let neighbors = self.select_neighbors(&vector, &candidates, self.m);
-                
-                node.layers[lc] = neighbors.clone();
-                
-                // Add back-connections
-                let m_max = if lc == 0 { self.m_max0 } else { self.m };
-                for &neighbor_id in &neighbors {
-                    if !self.nodes[neighbor_id].layers[lc].contains(&id) {
-                        self.nodes[neighbor_id].layers[lc].push(id);
-                        if self.nodes[neighbor_id].layers[lc].len() > m_max {
-                            // Prune — collect data first, then mutate
-                            let nv = self.nodes[neighbor_id].vector.clone();
-                            let layer_copy = self.nodes[neighbor_id].layers[lc].clone();
-                            let kept = self.select_neighbors_from_ids(&nv, &layer_copy, m_max);
-                            self.nodes[neighbor_id].layers[lc] = kept;
-                        }
-                    }
-                }
-                
+                neighbors_by_layer.push((lc, neighbors.clone()));
                 curr_ep = candidates;
             }
 
@@ -121,11 +101,48 @@ impl HnswIndex {
             self.entry_point = Some(id);
         }
 
+        // Create the node with its neighbors
+        let mut layers = vec![Vec::new(); level + 1];
+        for (lc, neighbors) in &neighbors_by_layer {
+            layers[*lc] = neighbors.clone();
+        }
+
+        let node = HnswNode {
+            id,
+            vector: vector.clone(),
+            label,
+            layers,
+        };
+
+        // Push the node so 'id' is now valid
         self.nodes.push(node);
+
+        // Update neighbors' back-connections to point to the new 'id'
+        for (lc, neighbors) in neighbors_by_layer {
+            let m_max = if lc == 0 { self.m_max0 } else { self.m };
+            for neighbor_id in neighbors {
+                if !self.nodes[neighbor_id].layers[lc].contains(&id) {
+                    self.nodes[neighbor_id].layers[lc].push(id);
+                    if self.nodes[neighbor_id].layers[lc].len() > m_max {
+                        let nv = self.nodes[neighbor_id].vector.clone();
+                        let layer_copy = self.nodes[neighbor_id].layers[lc].clone();
+                        let kept = self.select_neighbors_from_ids(&nv, &layer_copy, m_max);
+                        self.nodes[neighbor_id].layers[lc] = kept;
+                    }
+                }
+            }
+        }
+
         id
     }
 
-    fn search_layer(&self, query: &[f32], entry_points: &[usize], ef: usize, layer: usize) -> Vec<usize> {
+    fn search_layer(
+        &self,
+        query: &[f32],
+        entry_points: &[usize],
+        ef: usize,
+        layer: usize,
+    ) -> Vec<usize> {
         let mut visited: HashSet<usize> = entry_points.iter().cloned().collect();
         let mut candidates: BinaryHeap<Candidate> = BinaryHeap::new();
         let mut results: BinaryHeap<std::cmp::Reverse<Candidate>> = BinaryHeap::new();
@@ -149,8 +166,14 @@ impl HnswIndex {
                         let d = Self::distance(query, &self.nodes[neighbor].vector);
                         let worst = results.peek().map(|r| r.0.dist).unwrap_or(f32::MAX);
                         if d < worst || results.len() < ef {
-                            candidates.push(Candidate { dist: d, id: neighbor });
-                            results.push(std::cmp::Reverse(Candidate { dist: d, id: neighbor }));
+                            candidates.push(Candidate {
+                                dist: d,
+                                id: neighbor,
+                            });
+                            results.push(std::cmp::Reverse(Candidate {
+                                dist: d,
+                                id: neighbor,
+                            }));
                             if results.len() > ef {
                                 results.pop();
                             }
@@ -167,8 +190,14 @@ impl HnswIndex {
         self.select_neighbors_from_ids(query, candidates, m)
     }
 
-    fn select_neighbors_from_ids(&self, query: &[f32], candidates: &[usize], m: usize) -> Vec<usize> {
-        let mut scored: Vec<(f32, usize)> = candidates.iter()
+    fn select_neighbors_from_ids(
+        &self,
+        query: &[f32],
+        candidates: &[usize],
+        m: usize,
+    ) -> Vec<usize> {
+        let mut scored: Vec<(f32, usize)> = candidates
+            .iter()
             .map(|&id| (Self::distance(query, &self.nodes[id].vector), id))
             .collect();
         scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
@@ -189,14 +218,16 @@ impl HnswIndex {
         }
 
         let candidates = self.search_layer(query, &curr_ep, k.max(self.ef_construction), 0);
-        
-        let mut results: Vec<(f32, usize)> = candidates.iter()
+
+        let mut results: Vec<(f32, usize)> = candidates
+            .iter()
             .map(|&id| (Self::distance(query, &self.nodes[id].vector), id))
             .collect();
         results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
         results.truncate(k);
 
-        results.into_iter()
+        results
+            .into_iter()
             .map(|(dist, id)| (id, 1.0 - dist, self.nodes[id].label.as_str()))
             .collect()
     }
@@ -211,11 +242,15 @@ impl HnswIndex {
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() { return 0.0; }
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let ma: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let mb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if ma == 0.0 || mb == 0.0 { return 0.0; }
+    if ma == 0.0 || mb == 0.0 {
+        return 0.0;
+    }
     dot / (ma * mb)
 }
 
@@ -225,9 +260,14 @@ fn rand_f64() -> f64 {
     static SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut s = SEED.load(std::sync::atomic::Ordering::Relaxed);
     if s == 0 {
-        s = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos() as u64;
+        s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as u64;
     }
-    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     SEED.store(s, std::sync::atomic::Ordering::Relaxed);
     (s >> 11) as f64 / (1u64 << 53) as f64
 }

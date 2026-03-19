@@ -80,23 +80,45 @@ impl Tool for ShellTool {
 
         // Guard: prevent self-restart/self-kill mid-conversation
         let cmd_lower = args.command.to_lowercase();
-        if (cmd_lower.contains("systemctl") && cmd_lower.contains("unthinkclaw"))
-            || (cmd_lower.contains("pkill") && cmd_lower.contains("unthinkclaw"))
-            || (cmd_lower.contains("kill") && cmd_lower.contains("unthinkclaw"))
+        let self_name = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "unthinkclaw".to_string());
+
+        if (cmd_lower.contains("systemctl") && cmd_lower.contains(&self_name))
+            || (cmd_lower.contains("pkill") && cmd_lower.contains(&self_name))
+            || (cmd_lower.contains("kill") && cmd_lower.contains(&self_name))
+            || cmd_lower.contains("shutdown")
+            || cmd_lower.contains("reboot")
         {
             return Ok(ToolResult::error(
-                "⚠️ Cannot restart/kill yourself mid-conversation. Use /restart command instead.",
+                "⚠️ Restricted command: Cannot restart/kill the host or agent mid-conversation.",
             ));
         }
 
         let timeout = args.timeout.unwrap_or(self.timeout_secs);
 
         let cwd = if let Some(dir) = &args.cwd {
-            if dir.starts_with('/') {
+            let requested = if dir.starts_with('/') {
                 PathBuf::from(dir)
             } else {
                 self.workspace.join(dir)
+            };
+
+            // Canonicalize to ensure it's inside workspace
+            let canonical_workspace = self
+                .workspace
+                .canonicalize()
+                .unwrap_or_else(|_| self.workspace.clone());
+            let canonical_requested = requested.canonicalize().unwrap_or(requested);
+
+            if !canonical_requested.starts_with(&canonical_workspace) {
+                return Ok(ToolResult::error(format!(
+                    "Access denied: directory '{}' is outside the workspace.",
+                    dir
+                )));
             }
+            canonical_requested
         } else {
             self.workspace.clone()
         };

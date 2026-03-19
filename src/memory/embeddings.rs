@@ -8,7 +8,7 @@ pub trait EmbeddingProvider: Send + Sync {
     fn name(&self) -> &str;
     fn dimensions(&self) -> usize;
     async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
-    
+
     async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         let mut results = self.embed(&[text]).await?;
         results.pop().context("No embedding returned")
@@ -110,15 +110,19 @@ impl EmbeddingProvider for OpenAiEmbedding {
 
     async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let url = format!("{}/v1/embeddings", self.base_url);
-        
+
         let request = OpenAiEmbeddingRequest {
             input: texts.iter().map(|s| s.to_string()).collect(),
             model: self.model.clone(),
         };
 
-        let mut request_builder = self.client.post(&url).header("Content-Type", "application/json");
+        let mut request_builder = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json");
         if let Some(api_key) = &self.api_key {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
+            request_builder =
+                request_builder.header("Authorization", format!("Bearer {}", api_key));
         }
         let response = request_builder
             .json(&request)
@@ -234,7 +238,11 @@ pub fn create_embedding_provider(
         "noop" | "none" | "keyword" => Ok(Arc::new(NoopEmbedding)),
         "openai" => {
             let api_key = api_key.context("OpenAI API key required")?;
-            Ok(Arc::new(OpenAiEmbedding::new(Some(api_key), model, base_url)))
+            Ok(Arc::new(OpenAiEmbedding::new(
+                Some(api_key),
+                model,
+                base_url,
+            )))
         }
         "openai_compat" => Ok(Arc::new(OpenAiEmbedding::new(api_key, model, base_url))),
         "ollama" | "local" => {

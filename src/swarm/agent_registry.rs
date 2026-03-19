@@ -100,3 +100,77 @@ impl AgentInfo {
         self
     }
 }
+
+#[cfg(feature = "swarm")]
+use crate::swarm::storage::SwarmStorage;
+use std::sync::Arc;
+
+pub struct AgentRegistry {
+    #[cfg(feature = "swarm")]
+    storage: Arc<dyn SwarmStorage>,
+}
+
+impl AgentRegistry {
+    #[cfg(feature = "swarm")]
+    pub fn new(storage: Arc<dyn SwarmStorage>) -> Self {
+        Self { storage }
+    }
+
+    pub async fn register(&self, agent: AgentInfo) -> anyhow::Result<String> {
+        #[cfg(feature = "swarm")]
+        {
+            self.storage.upsert_agent(&agent).await?;
+            Ok(agent.agent_id)
+        }
+        #[cfg(not(feature = "swarm"))]
+        {
+            let _ = agent;
+            anyhow::bail!("Swarm storage requires 'swarm' feature")
+        }
+    }
+
+    pub async fn get_agent(&self, id: &str) -> anyhow::Result<Option<AgentInfo>> {
+        #[cfg(feature = "swarm")]
+        {
+            self.storage.get_agent(id).await
+        }
+        #[cfg(not(feature = "swarm"))]
+        {
+            let _ = id;
+            Ok(None)
+        }
+    }
+
+    pub async fn find_by_capability(&self, cap: AgentCapability) -> anyhow::Result<Vec<AgentInfo>> {
+        #[cfg(feature = "swarm")]
+        {
+            let agents = self.storage.list_all_agents().await?;
+            Ok(agents
+                .into_iter()
+                .filter(|a| a.capabilities.contains(&cap) && a.status != AgentStatus::Dead)
+                .collect())
+        }
+        #[cfg(not(feature = "swarm"))]
+        {
+            let _ = cap;
+            Ok(Vec::new())
+        }
+    }
+
+    pub async fn heartbeat(&self, id: &str) -> anyhow::Result<()> {
+        #[cfg(feature = "swarm")]
+        {
+            if let Some(mut agent) = self.storage.get_agent(id).await? {
+                agent.last_heartbeat = Utc::now();
+                agent.status = AgentStatus::Active;
+                self.storage.upsert_agent(&agent).await?;
+            }
+            Ok(())
+        }
+        #[cfg(not(feature = "swarm"))]
+        {
+            let _ = id;
+            Ok(())
+        }
+    }
+}

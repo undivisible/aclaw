@@ -10,9 +10,14 @@ use std::sync::{
 
 use super::traits::*;
 
+use crate::memory::hnsw::HnswIndex;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+
 #[derive(Clone)]
 pub struct SqliteMemory {
     pool: Arc<ConnectionPool>,
+    indices: Arc<RwLock<HashMap<String, Arc<RwLock<HnswIndex>>>>>,
 }
 
 struct ConnectionPool {
@@ -37,6 +42,7 @@ impl SqliteMemory {
                 connections,
                 next: AtomicUsize::new(0),
             }),
+            indices: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -61,6 +67,159 @@ impl SqliteMemory {
         } else {
             Some(terms.join(" AND "))
         }
+    }
+
+    /// (Re)build the HNSW index for a specific namespace from SQLite
+    async fn rebuild_index(&self, namespace: &str) -> anyhow::Result<()> {
+        let ns = namespace.to_string();
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
+
+        let entries =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(String, Vec<f32>)>> {
+                let guard = pool.connections[index].lock();
+                let mut stmt =
+                    guard.prepare("SELECT key, vector FROM embeddings WHERE namespace = ?1")?;
+                let rows = stmt
+                    .query_map(rusqlite::params![ns], |row| {
+                        let key: String = row.get(0)?;
+                        let blob: Vec<u8> = row.get(1)?;
+                        let vector: Vec<f32> = blob
+                            .chunks_exact(4)
+                            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                            .collect();
+                        Ok((key, vector))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(rows)
+            })
+            .await??;
+
+        let mut hnsw = HnswIndex::new(16, 100);
+        for (key, vector) in entries {
+            hnsw.insert(vector, key);
+        }
+
+        let mut indices: tokio::sync::RwLockWriteGuard<HashMap<String, Arc<RwLock<HnswIndex>>>> =
+            self.indices.write().await;
+        indices.insert(namespace.to_string(), Arc::new(RwLock::new(hnsw)));
+
+        Ok(())
+    }
+
+    async fn get_or_create_index(&self, namespace: &str) -> anyhow::Result<Arc<RwLock<HnswIndex>>> {
+        let indices: tokio::sync::RwLockWriteGuard<HashMap<String, Arc<RwLock<HnswIndex>>>> =
+            self.indices.write().await;
+        if let Some(idx) = indices.get(namespace) {
+            return Ok(Arc::clone(idx));
+        }
+
+        // Rebuild from SQLite if not in cache
+        drop(indices);
+        self.rebuild_index(namespace).await?;
+
+        let indices: tokio::sync::RwLockReadGuard<HashMap<String, Arc<RwLock<HnswIndex>>>> =
+            self.indices.read().await;
+        indices
+            .get(namespace)
+            .map(Arc::clone)
+            .ok_or_else(|| anyhow::anyhow!("Failed to create index for namespace: {}", namespace))
+    }
+
+    pub async fn store_embedding_hnsw(
+        &self,
+        namespace: &str,
+        key: &str,
+        vector: &[f32],
+        text: &str,
+    ) -> anyhow::Result<()> {
+        let ns = namespace.to_string();
+        let k = key.to_string();
+        let v = vector.to_vec();
+        let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let t = text.to_string();
+
+        // Update SQLite
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let guard = pool.connections[index].lock();
+            guard.execute(
+                "INSERT OR REPLACE INTO embeddings (namespace, key, vector, text) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![ns, k, blob, t],
+            )?;
+            Ok(())
+        })
+        .await??;
+
+        // Update HNSW cache
+        let hnsw_lock: Arc<RwLock<HnswIndex>> = self.get_or_create_index(namespace).await?;
+        let mut hnsw: tokio::sync::RwLockWriteGuard<HnswIndex> = hnsw_lock.write().await;
+        hnsw.insert(v, key.to_string());
+
+        Ok(())
+    }
+
+    pub async fn search_embeddings_hnsw(
+        &self,
+        namespace: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> anyhow::Result<Vec<EmbeddingEntry>> {
+        let ns = namespace.to_string();
+
+        // Use HNSW cache for ANN search
+        let hnsw_lock: Arc<RwLock<HnswIndex>> = self.get_or_create_index(namespace).await?;
+        let top_k = {
+            let hnsw: tokio::sync::RwLockReadGuard<HnswIndex> = hnsw_lock.read().await;
+            hnsw.search(query_vector, limit)
+                .into_iter()
+                .map(|(_, _, label)| label.to_string())
+                .collect::<Vec<String>>()
+        };
+
+        if top_k.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fetch full entries from SQLite for the top results
+        let pool = Arc::clone(&self.pool);
+        let index = self.connection_index();
+
+        let results = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<EmbeddingEntry>> {
+            let guard = pool.connections[index].lock();
+            let mut entries = Vec::with_capacity(top_k.len());
+
+            for key in top_k {
+                let mut stmt = guard.prepare(
+                    "SELECT namespace, key, vector, text, created_at FROM embeddings WHERE namespace = ?1 AND key = ?2"
+                )?;
+                if let Ok(entry) = stmt.query_row(rusqlite::params![ns, key], |row| {
+                    let blob: Vec<u8> = row.get(2)?;
+                    let vector: Vec<f32> = blob
+                        .chunks_exact(4)
+                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect();
+                    let created_str: String = row.get(4)?;
+                    let created_at = chrono::DateTime::parse_from_rfc3339(&created_str)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|_| chrono::Utc::now());
+                    Ok(EmbeddingEntry {
+                        namespace: row.get(0)?,
+                        key: row.get(1)?,
+                        vector,
+                        text: row.get(3)?,
+                        created_at,
+                    })
+                }) {
+                    entries.push(entry);
+                }
+            }
+            Ok(entries)
+        }).await??;
+
+        Ok(results)
     }
 }
 
@@ -448,8 +607,6 @@ impl MemoryBackend for SqliteMemory {
         Ok(())
     }
 
-    // ── Embeddings ──
-
     async fn store_embedding(
         &self,
         namespace: &str,
@@ -457,21 +614,8 @@ impl MemoryBackend for SqliteMemory {
         vector: &[f32],
         text: &str,
     ) -> anyhow::Result<()> {
-        let ns = namespace.to_string();
-        let k = key.to_string();
-        let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let t = text.to_string();
-        let pool = Arc::clone(&self.pool);
-        let index = self.connection_index();
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let guard = pool.connections[index].lock();
-            guard.execute(
-                "INSERT OR REPLACE INTO embeddings (namespace, key, vector, text) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![ns, k, blob, t],
-            )?;
-            Ok(())
-        }).await??;
-        Ok(())
+        self.store_embedding_hnsw(namespace, key, vector, text)
+            .await
     }
 
     async fn search_embeddings(
@@ -480,49 +624,8 @@ impl MemoryBackend for SqliteMemory {
         query_vector: &[f32],
         limit: usize,
     ) -> anyhow::Result<Vec<EmbeddingEntry>> {
-        let ns = namespace.to_string();
-        let qv = query_vector.to_vec();
-        let pool = Arc::clone(&self.pool);
-        let index = self.connection_index();
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<EmbeddingEntry>> {
-            let guard = pool.connections[index].lock();
-            let mut stmt = guard.prepare(
-                "SELECT namespace, key, vector, text, created_at FROM embeddings WHERE namespace = ?1"
-            )?;
-            let rows: Vec<EmbeddingEntry> = stmt
-                .query_map(rusqlite::params![ns], |row| {
-                    let blob: Vec<u8> = row.get(2)?;
-                    let vector: Vec<f32> = blob
-                        .chunks_exact(4)
-                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                        .collect();
-                    let created_str: String = row.get(4)?;
-                    let created_at = chrono::DateTime::parse_from_rfc3339(&created_str)
-                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                        .unwrap_or_else(|_| chrono::Utc::now());
-                    Ok(EmbeddingEntry {
-                        namespace: row.get(0)?,
-                        key: row.get(1)?,
-                        vector,
-                        text: row.get(3)?,
-                        created_at,
-                    })
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-
-            // Cosine similarity ranking
-            let mut scored: Vec<(f32, EmbeddingEntry)> = rows
-                .into_iter()
-                .map(|entry| {
-                    let sim = cosine_similarity_sqlite(&qv, &entry.vector);
-                    (sim, entry)
-                })
-                .collect();
-            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-            scored.truncate(limit);
-            Ok(scored.into_iter().map(|(_, e)| e).collect())
-        }).await?
+        self.search_embeddings_hnsw(namespace, query_vector, limit)
+            .await
     }
 
     // ── File indexing ──
@@ -651,18 +754,7 @@ impl MemoryBackend for SqliteMemory {
     }
 }
 
-fn cosine_similarity_sqlite(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-    let ma: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let mb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if ma == 0.0 || mb == 0.0 {
-        return 0.0;
-    }
-    dot / (ma * mb)
-}
+// ── Helpers ──
 
 #[cfg(test)]
 mod tests {

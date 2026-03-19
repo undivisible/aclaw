@@ -36,8 +36,18 @@ pub trait Channel: Send + Sync {
     /// Start receiving messages. Returns a receiver for incoming messages.
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>>;
 
-    /// Send a message through this channel.
-    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<()>;
+    /// Send a message through this channel. Returns an optional message ID for tracking/editing.
+    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<Option<String>>;
+
+    /// Send a typing indicator (or equivalent) to the user.
+    async fn send_typing(&self, _chat_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Edit a previously sent message if the channel supports it.
+    async fn edit(&self, _chat_id: &str, _message_id: &str, _new_text: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     /// Stop the channel gracefully.
     async fn stop(&mut self) -> anyhow::Result<()>;

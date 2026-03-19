@@ -5,10 +5,9 @@ use std::sync::Arc;
 
 use axum::{extract::State, routing::post, Json, Router};
 
-use crate::agent::loop_runner::ProgressUpdate;
 use crate::agent::AgentRunner;
 use crate::channels::telegram::TelegramChannel;
-use crate::channels::Channel as _;
+use crate::channels::Channel;
 use crate::channels::IncomingMessage;
 use crate::memory::MemoryBackend;
 use crate::tools::message::MessageTool;
@@ -66,71 +65,15 @@ pub async fn run_telegram_chat(
 
         processing.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        let _ = tg.send_typing().await;
-        let progress_msg_id = tg.send_message("⏳").await.unwrap_or(0);
-        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(32);
+        // Signal progress — AgentRunner will now use channel.send_typing() during rounds
+        let _ = tg.send_typing(&msg.chat_id).await;
 
-        let tg_progress = tg.clone();
-        let progress_task = tokio::spawn(async move {
-            while let Some(update) = progress_rx.recv().await {
-                let status_text = match update {
-                    ProgressUpdate::Thinking => "thinking...".to_string(),
-                    ProgressUpdate::ToolCall { name, round } => {
-                        let display = match name.as_str() {
-                            "exec" => "running shell command",
-                            "Read" => "reading file",
-                            "Write" => "writing file",
-                            "Edit" => "editing file",
-                            "web_search" => "searching web",
-                            "web_fetch" => "fetching webpage",
-                            "memory_search" => "searching memory",
-                            "browser" => "browsing web",
-                            "create_tool" => "creating custom tool",
-                            _ => &name,
-                        };
-                        format!("🔧 {} (round {})", display, round)
-                    }
-                    ProgressUpdate::Processing { round, tool_count } => {
-                        if round == 0 || tool_count == 0 {
-                            break;
-                        }
-                        format!("processing... round {} ({} tools)", round, tool_count)
-                    }
-                };
-
-                if progress_msg_id > 0 {
-                    let _ = tg_progress
-                        .edit_message(progress_msg_id, &status_text)
-                        .await;
-                }
-            }
-        });
-
-        match runner.handle_message_pub(&msg, Some(&progress_tx)).await {
+        match runner.handle_message(&msg, &tg).await {
             Ok(response) => {
-                let _ = progress_tx
-                    .send(ProgressUpdate::Processing {
-                        round: 0,
-                        tool_count: 0,
-                    })
-                    .await;
-                drop(progress_tx);
-                let _ = progress_task.await;
-
-                if progress_msg_id > 0 {
-                    let _ = tg.delete_message(progress_msg_id).await;
-                }
                 let _ = tg.send_message(&response).await;
             }
             Err(error) => {
-                drop(progress_tx);
-                let _ = progress_task.await;
-
-                if progress_msg_id > 0 {
-                    let _ = tg
-                        .edit_message(progress_msg_id, &format!("❌ {}", error))
-                        .await;
-                }
+                let _ = tg.send_message(&format!("❌ {}", error)).await;
             }
         }
 

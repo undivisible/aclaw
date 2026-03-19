@@ -15,22 +15,10 @@ use crate::providers::{ChatMessage, ChatRequest, Provider};
 use crate::skills;
 use crate::tools::Tool;
 
-/// Hard circuit breaker (absolute max execution rounds)
-const CIRCUIT_BREAKER_ROUNDS: usize = 50;
 /// Warn the LLM after this many identical tool calls
 const LOOP_WARN_THRESHOLD: usize = 5;
 /// Hard stop after this many identical consecutive tool calls
 const LOOP_BREAK_THRESHOLD: usize = 8;
-/// Max conversation history (prevents context overflow)
-const MAX_HISTORY_MESSAGES: usize = 8;
-/// Max chars for a single tool result (OpenClaw-style truncation)
-const MAX_TOOL_RESULT_CHARS: usize = 20_000;
-/// Max context chars before triggering mid-loop compaction
-const MAX_CONTEXT_CHARS: usize = 150_000;
-/// Fast/cheap model for planning + summarization
-const FAST_MODEL: &str = "claude-haiku-4-5";
-/// Heavy model for complex coding/reasoning
-const HEAVY_MODEL: &str = "claude-opus-4";
 
 /// Agent execution state machine
 #[derive(Debug, Clone, PartialEq)]
@@ -43,17 +31,6 @@ enum AgentState {
     Summarizing,
     /// Direct: Simple query, no planning needed — use main model (temp 0.7)
     Direct,
-}
-
-/// Progress update sent during agent processing
-#[derive(Debug, Clone)]
-pub enum ProgressUpdate {
-    /// Agent is thinking (first LLM call)
-    Thinking,
-    /// Agent is calling a tool
-    ToolCall { name: String, round: usize },
-    /// Agent got tool result, calling LLM again
-    Processing { round: usize, tool_count: usize },
 }
 
 pub struct AgentRunner {
@@ -70,6 +47,8 @@ pub struct AgentRunner {
     cost_tracker: Arc<CostTracker>,
     /// Steering messages — injected into the loop between rounds
     pub steering_queue: Arc<std::sync::Mutex<Vec<String>>>,
+    /// Agent limits and model preferences
+    pub agent_config: crate::config::AgentConfig,
 }
 
 impl AgentRunner {
@@ -90,7 +69,13 @@ impl AgentRunner {
             skills: Arc::new(RwLock::new(Vec::new())),
             cost_tracker: Arc::new(CostTracker::new()),
             steering_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
+            agent_config: crate::config::AgentConfig::default(),
         }
+    }
+
+    pub fn with_config(mut self, config: crate::config::AgentConfig) -> Self {
+        self.agent_config = config;
+        self
     }
 
     /// Queue a steering message to inject into the current agent loop
@@ -150,18 +135,10 @@ impl AgentRunner {
 
         while let Some(msg) = rx.recv().await {
             // Send typing indicator
-            let progress_tx = self.setup_progress(channel).await;
+            let _ = channel.send_typing(&msg.chat_id).await;
 
-            match self.handle_message(&msg, Some(&progress_tx)).await {
+            match self.handle_message(&msg, channel).await {
                 Ok(response) => {
-                    // Signal done to progress tracker
-                    let _ = progress_tx
-                        .send(ProgressUpdate::Processing {
-                            round: 0,
-                            tool_count: 0,
-                        })
-                        .await;
-
                     channel
                         .send(OutgoingMessage {
                             chat_id: msg.chat_id.clone(),
@@ -206,9 +183,9 @@ impl AgentRunner {
                 else => break,
             };
 
-            let progress_tx = self.setup_progress(channel).await;
+            let _ = channel.send_typing(&msg.chat_id).await;
 
-            match self.handle_message(&msg, Some(&progress_tx)).await {
+            match self.handle_message(&msg, channel).await {
                 Ok(response) => {
                     if msg.sender_id == "system" && response.contains("HEARTBEAT_OK") {
                         tracing::debug!("Heartbeat: agent responded OK, skipping output");
@@ -241,41 +218,14 @@ impl AgentRunner {
         Ok(())
     }
 
-    async fn setup_progress(&self, _channel: &dyn Channel) -> mpsc::Sender<ProgressUpdate> {
-        let (tx, mut rx) = mpsc::channel(32);
-
-        // Clone channel for the progress task
-        // Note: This requires Channel to be Clone or use Arc
-        // For now, we'll skip the actual typing indicator until Channel is made Clone-safe
-        tokio::spawn(async move {
-            while let Some(_update) = rx.recv().await {
-                // TODO: Send typing indicator via channel
-                // For now, just drain the channel
-            }
-        });
-
-        tx
-    }
-
-    /// Public handle message (for custom channel loops like Telegram with progress)
-    pub async fn handle_message_pub(
-        &self,
-        msg: &IncomingMessage,
-        progress: Option<&mpsc::Sender<ProgressUpdate>>,
-    ) -> anyhow::Result<String> {
-        self.handle_message(msg, progress).await
-    }
-
     /// Handle a single message — LLM call with tool loop + conversation history.
-    async fn handle_message(
+    pub async fn handle_message(
         &self,
         msg: &IncomingMessage,
-        progress: Option<&mpsc::Sender<ProgressUpdate>>,
+        channel: &dyn Channel,
     ) -> anyhow::Result<String> {
         // Signal thinking
-        if let Some(tx) = progress {
-            let _ = tx.send(ProgressUpdate::Thinking).await;
-        }
+        let _ = channel.send_typing(&msg.chat_id).await;
 
         // Build messages: system prompt + conversation history + new message
         let system_prompt = self.system_prompt.read().await.clone();
@@ -295,10 +245,10 @@ impl AgentRunner {
             }
         }
 
-        // Load conversation history from SQLite (LIMITED to 8 to save tokens)
+        // Load conversation history from SQLite
         let history = self
             .memory
-            .get_conversation_history(&msg.chat_id, MAX_HISTORY_MESSAGES)
+            .get_conversation_history(&msg.chat_id, self.agent_config.max_history_messages)
             .await?;
         for (role, content) in history {
             match role.as_str() {
@@ -359,7 +309,7 @@ impl AgentRunner {
             let plan_request = ChatRequest {
                 messages: &plan_messages,
                 tools: None,
-                model: FAST_MODEL,
+                model: &self.agent_config.fast_model,
                 temperature: 0.8,
                 max_tokens: Some(500),
             };
@@ -374,7 +324,7 @@ impl AgentRunner {
                         let _ = self
                             .cost_tracker
                             .record(
-                                FAST_MODEL,
+                                &self.agent_config.fast_model,
                                 TokenUsage {
                                     input_tokens: usage.input_tokens as usize,
                                     output_tokens: usage.output_tokens as usize,
@@ -390,7 +340,7 @@ impl AgentRunner {
                     if p_upper.contains("MODEL_CHOICE: OPUS")
                         || p_upper.contains("MODEL_CHOICE:OPUS")
                     {
-                        execution_model = HEAVY_MODEL.to_string();
+                        execution_model = self.agent_config.heavy_model.clone();
                         tracing::info!("Planner chose OPUS for execution");
                     } else if p_upper.contains("MODEL_CHOICE: VIBEMANIA")
                         || p_upper.contains("MODEL_CHOICE:VIBEMANIA")
@@ -425,7 +375,7 @@ impl AgentRunner {
         let mut tool_call_history: Vec<String> = Vec::new();
         let mut compactions_done: usize = 0;
 
-        for round in 0..CIRCUIT_BREAKER_ROUNDS {
+        for round in 0..self.agent_config.max_rounds {
             // Check for steering messages
             {
                 let mut queue = self.steering_queue.lock().unwrap();
@@ -442,7 +392,7 @@ impl AgentRunner {
 
             // Context budget check — compact if too large
             let context_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-            if context_chars > MAX_CONTEXT_CHARS {
+            if context_chars > self.agent_config.max_context_chars {
                 tracing::info!(
                     "Compacting at round {} ({} chars)",
                     round + 1,
@@ -454,9 +404,9 @@ impl AgentRunner {
 
             // Select model + temperature based on state
             let (model, temperature) = match state {
-                AgentState::Planning => (FAST_MODEL.to_string(), 0.8),
+                AgentState::Planning => (self.agent_config.fast_model.clone(), 0.8),
                 AgentState::Executing => (execution_model.clone(), 0.2),
-                AgentState::Summarizing => (FAST_MODEL.to_string(), 0.7),
+                AgentState::Summarizing => (self.agent_config.fast_model.clone(), 0.7),
                 AgentState::Direct => (main_model.clone(), 0.7),
             };
 
@@ -566,16 +516,7 @@ impl AgentRunner {
             }
 
             // Progress callback
-            if let Some(tx) = progress {
-                for tc in &response.tool_calls {
-                    let _ = tx
-                        .send(ProgressUpdate::ToolCall {
-                            name: tc.name.clone(),
-                            round: round + 1,
-                        })
-                        .await;
-                }
-            }
+            let _ = channel.send_typing(&msg.chat_id).await;
 
             // Build assistant tool_use message
             {
@@ -624,16 +565,17 @@ impl AgentRunner {
                     crate::tools::ToolResult::error(format!("Unknown tool: {}", tc.name))
                 };
 
-                let truncated_output = if result.output.len() > MAX_TOOL_RESULT_CHARS {
-                    format!(
-                        "{}...\n⚠️ [Truncated {} → {} chars]",
-                        &result.output[..MAX_TOOL_RESULT_CHARS],
-                        result.output.len(),
-                        MAX_TOOL_RESULT_CHARS
-                    )
-                } else {
-                    result.output.clone()
-                };
+                let truncated_output =
+                    if result.output.len() > self.agent_config.max_tool_result_chars {
+                        format!(
+                            "{}...\n⚠️ [Truncated {} → {} chars]",
+                            &result.output[..self.agent_config.max_tool_result_chars],
+                            result.output.len(),
+                            self.agent_config.max_tool_result_chars
+                        )
+                    } else {
+                        result.output.clone()
+                    };
 
                 messages.push(ChatMessage::tool_result(&tc.id, &truncated_output));
             }
@@ -644,12 +586,18 @@ impl AgentRunner {
             }
         }
 
-        tracing::warn!("Circuit breaker after {} rounds", CIRCUIT_BREAKER_ROUNDS);
-        self.persist_conversation(msg, &format!("Hit {} rounds.", CIRCUIT_BREAKER_ROUNDS))
-            .await?;
+        tracing::warn!(
+            "Circuit breaker after {} rounds",
+            self.agent_config.max_rounds
+        );
+        self.persist_conversation(
+            msg,
+            &format!("Hit {} rounds.", self.agent_config.max_rounds),
+        )
+        .await?;
         Ok(format!(
             "⚠️ Hit {} rounds ({} compactions). Break into smaller tasks?",
-            CIRCUIT_BREAKER_ROUNDS, compactions_done
+            self.agent_config.max_rounds, compactions_done
         ))
     }
 
@@ -778,15 +726,30 @@ impl AgentRunner {
         let compact_request = ChatRequest {
             messages: &compact_messages,
             tools: None,
-            model: FAST_MODEL,
+            model: &self.agent_config.fast_model,
             temperature: 0.3,
             max_tokens: Some(1000),
         };
 
         let summary = match self.provider.chat(&compact_request).await {
-            Ok(resp) => resp
-                .text
-                .unwrap_or_else(|| "Failed to summarize.".to_string()),
+            Ok(resp) => {
+                // Track cost for compaction
+                if let Some(usage) = &resp.usage {
+                    let _ = self
+                        .cost_tracker
+                        .record(
+                            &self.agent_config.fast_model,
+                            TokenUsage {
+                                input_tokens: usage.input_tokens as usize,
+                                output_tokens: usage.output_tokens as usize,
+                                total_tokens: (usage.input_tokens + usage.output_tokens) as usize,
+                            },
+                        )
+                        .await;
+                }
+                resp.text
+                    .unwrap_or_else(|| "Failed to summarize.".to_string())
+            }
             Err(e) => {
                 tracing::warn!("Compaction failed: {}, falling back to truncation", e);
                 // Fallback: just truncate old messages

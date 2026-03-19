@@ -22,7 +22,7 @@ pub mod storage;
 #[cfg(feature = "swarm")]
 pub mod team;
 
-pub use agent_registry::{AgentCapability, AgentInfo, AgentStatus};
+pub use agent_registry::{AgentCapability, AgentInfo, AgentRegistry, AgentStatus};
 pub use models::*;
 pub use task_queue::{Task, TaskPriority, TaskStatus};
 

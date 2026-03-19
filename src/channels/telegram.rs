@@ -30,19 +30,6 @@ struct TelegramResponse {
     result: Option<Vec<Update>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
-struct SendResult {
-    ok: bool,
-    result: Option<SentMessage>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
-struct SentMessage {
-    message_id: i64,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Update {
     update_id: i64,
@@ -131,16 +118,21 @@ impl TelegramChannel {
 
     /// Transcribe voice/audio file using faster-whisper
     async fn transcribe_voice(&self, file_id: &str) -> anyhow::Result<String> {
-        // Get file info from Telegram API
+        // 1. Get file info from Telegram API
         let file_info_url = format!(
             "https://api.telegram.org/bot{}/getFile?file_id={}",
             self.bot_token, file_id
         );
 
         let resp = self.client.get(&file_info_url).send().await?;
-        let body: Value = resp.json().await?;
+        if !resp.status().is_success() {
+            tracing::error!("Telegram getFile failed: HTTP {}", resp.status());
+            return Ok(String::new());
+        }
 
+        let body: Value = resp.json().await?;
         if body["ok"].as_bool() != Some(true) {
+            tracing::error!("Telegram getFile error: {:?}", body["error_description"]);
             return Ok(String::new());
         }
 
@@ -148,32 +140,58 @@ impl TelegramChannel {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No file_path in response"))?;
 
-        // Download the file
+        // 2. Download the file
         let download_url = format!(
             "https://api.telegram.org/file/bot{}/{}",
             self.bot_token, file_path
         );
 
         let file_resp = self.client.get(&download_url).send().await?;
+        if !file_resp.status().is_success() {
+            tracing::error!("Telegram download failed: HTTP {}", file_resp.status());
+            return Ok(String::new());
+        }
         let file_bytes = file_resp.bytes().await?;
 
-        // Create temp file
-        let temp_path = format!("/tmp/voice_{}.ogg", uuid::Uuid::new_v4());
+        // 3. Create temp file
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join(format!("unthinkclaw_voice_{}.ogg", uuid::Uuid::new_v4()));
         tokio::fs::write(&temp_path, file_bytes).await?;
 
-        // Call faster-whisper via Python (async)
+        // 4. Call faster-whisper via Python (async)
+        // Check for python3 first
+        let py_check = tokio::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .await;
+
+        if py_check.is_err() {
+            tracing::warn!("python3 not found, skipping transcription");
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Ok(
+                "[Voice message received but python3 is missing for transcription]".to_string(),
+            );
+        }
+
         let output = tokio::process::Command::new("python3")
             .arg("-c")
             .arg(format!(
                 r#"
 import sys
-from faster_whisper import WhisperModel
-model = WhisperModel("tiny", device="cpu", compute_type="int8")
-segments, _ = model.transcribe("{}", language="en")
-text = " ".join([segment.text for segment in segments])
-print(text)
+try:
+    from faster_whisper import WhisperModel
+    model = WhisperModel("tiny", device="cpu", compute_type="int8")
+    segments, _ = model.transcribe(r"{}", language="en")
+    text = " ".join([segment.text for segment in segments])
+    print(text.strip())
+except ImportError:
+    print("ERROR: faster-whisper not installed")
+    sys.exit(1)
+except Exception as e:
+    print(f"ERROR: {{e}}")
+    sys.exit(1)
 "#,
-                temp_path
+                temp_path.display()
             ))
             .output()
             .await?;
@@ -182,9 +200,20 @@ print(text)
         let _ = tokio::fs::remove_file(&temp_path).await;
 
         if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            let transcription = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if transcription.is_empty() {
+                Ok("[Voice message: no speech detected]".to_string())
+            } else {
+                Ok(transcription)
+            }
         } else {
-            Ok(String::new())
+            let err_msg = String::from_utf8_lossy(&output.stdout);
+            if err_msg.contains("faster-whisper not installed") {
+                Ok("[Voice message: faster-whisper not installed]".to_string())
+            } else {
+                tracing::error!("Transcription failed: {}", err_msg);
+                Ok("[Voice message: transcription failed]".to_string())
+            }
         }
     }
 
@@ -308,7 +337,7 @@ print(text)
     }
 
     /// Send typing indicator
-    pub async fn send_typing(&self) -> anyhow::Result<()> {
+    pub async fn send_typing(&self, _chat_id: &str) -> anyhow::Result<()> {
         let _ = self
             .client
             .post(self.api_url("sendChatAction"))
@@ -432,8 +461,33 @@ impl Channel for TelegramChannel {
         Ok(rx)
     }
 
-    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<()> {
-        let _ = self.send_message(&message.text).await?;
+    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<Option<String>> {
+        let msg_id = self.send_message(&message.text).await?;
+        if msg_id > 0 {
+            Ok(Some(msg_id.to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn send_typing(&self, _chat_id: &str) -> anyhow::Result<()> {
+        let _ = self
+            .client
+            .post(self.api_url("sendChatAction"))
+            .json(&serde_json::json!({
+                "chat_id": self.chat_id,
+                "action": "typing",
+            }))
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn edit(&self, _chat_id: &str, message_id: &str, new_text: &str) -> anyhow::Result<()> {
+        let message_id = message_id.parse::<i64>().unwrap_or(0);
+        if message_id > 0 {
+            self.edit_message(message_id, new_text).await?;
+        }
         Ok(())
     }
 

@@ -73,8 +73,9 @@ impl Tool for EmbeddingStoreTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "embedding_store".to_string(),
-            description: "Generate an embedding for text and store it in the active memory backend."
-                .to_string(),
+            description:
+                "Generate an embedding for text and store it in the active memory backend."
+                    .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -129,8 +130,7 @@ impl Tool for EmbeddingSearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "embedding_search".to_string(),
-            description: "Embed a query and run semantic search over stored vectors."
-                .to_string(),
+            description: "Embed a query and run semantic search over stored vectors.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
