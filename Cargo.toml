@@ -54,7 +54,7 @@ provider-cloudflare = []
 docker = ["dep:bollard"]
 
 # Swarm mode (distributed agent coordination)
-swarm = ["dep:surrealdb", "dep:rocksdb"]
+swarm = []
 
 # Bundles
 all-channels = ["channel-cli", "channel-telegram", "channel-discord", "channel-slack", "channel-whatsapp", "channel-signal", "channel-matrix", "channel-irc", "channel-googlechat", "channel-msteams"]
@@ -90,12 +90,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# Database (SQLite for memory/state)
-rusqlite = { version = "0.30", features = ["bundled"] }
-
 # Embedded SurrealDB + RocksDB (primary memory backend)
-surrealdb = { version = "2", features = ["kv-rocksdb"], optional = true }
-rocksdb = { version = "0.22", optional = true }
+surrealdb = { version = "2", features = ["kv-rocksdb"] }
+rocksdb = { version = "0.22" }
 
 # Container management (optional — only if you need Docker isolation)
 bollard = { version = "0.18", optional = true }

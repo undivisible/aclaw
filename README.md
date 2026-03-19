@@ -3,9 +3,8 @@
 unthinkclaw is a local-first Rust agent runtime for people who want the bot on
 their own machine, not hidden behind a hosted control plane.
 
-It is small, async-first, and moving toward SurrealDB + RocksDB as the primary
-state layer, while still keeping a lightweight SQLite fallback for local/dev
-paths that have not been fully migrated yet.
+It is small, async-first, and uses SurrealDB + RocksDB as the primary state
+layer.
 
 ## What This Branch Is
 
@@ -41,8 +40,8 @@ As of March 18, 2026:
 - Tool execution for shell, files, web fetch/search, browser, doctor, MCP,
   dynamic tools, and messaging
 - SurrealDB + RocksDB memory backend for the long-term storage path
-- SQLite fallback memory with conversation history, FTS, chunk/file indexing,
-  and sticker cache tables
+- SurrealDB memory with conversation history, FTS, chunk/file indexing, and
+  sticker cache tables
 - Cron scheduling, diagnostics, execution policy, and swarm coordination
 - Toolset-based tool exposure control, session search, and managed skills
 
@@ -118,20 +117,15 @@ Notes:
 
 ## Storage Direction
 
-The repo should not treat SQLite as the end state.
-
-- SurrealDB + RocksDB is the target backend for memory, session state, and
+- SurrealDB + RocksDB is the backend for memory, session state, and
   swarm/coordinator data.
-- SQLite is still present as a compatibility and local-dev fallback while the
-  remaining SQLite-only paths are moved over.
-- If you explicitly set `"storage.backend": "surreal"` without building the
-  Surreal feature set, startup now fails fast instead of quietly pretending the
-  storage layer matches production intent.
+- `storage.backend` is fixed to `surreal`.
+- startup fails fast if a config still requests any other storage mode.
 
 ## Rough Edges Still On Deck
 
-- the storage migration is only partially complete; cron/scheduler and some
-  memory flows still assume SQLite-shaped behavior
+- cron/scheduler and some memory flows still need a bit more cleanup around the
+  Surreal-backed storage contract
 - Daytona is scaffolded, but not yet threaded through tool execution/runtime
   selection
 - managed skills exist as a tool and persistence layer, but the agent does not

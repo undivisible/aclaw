@@ -9,7 +9,7 @@ Status key:
 
 ## Verified Done
 
-- [x] SQLite memory schema includes `files`, `chunks`, FTS, and sticker cache
+- [x] SurrealDB memory schema includes `files`, `chunks`, FTS, and sticker cache
 - [x] Conversation history is loaded by `chat_id` before agent calls
 - [x] `CLAUDE.md` is in sync with repo instructions via symlink to `AGENTS.md`
 - [x] `cargo clippy --all-targets -- -D warnings` passes
@@ -25,8 +25,7 @@ Status key:
 
 - [-] tighten docs so they match the actual state of `main`
 - [-] keep the device-first branch clearly separated from hosted platform work
-- [-] make SurrealDB + RocksDB the documented primary backend and demote SQLite
-  to fallback/dev status
+- [-] finish tightening SurrealDB docs and scheduler/session coverage
 - [-] thread Hermes-style additions into the runtime without bloating the hot
   path:
   - toolset allowlists
@@ -38,7 +37,7 @@ Status key:
 
 - [ ] add tests that cover Telegram markdown conversion and long-message chunking
 - [ ] add tests for audio/sticker handling in Telegram
-- [ ] port scheduler/cron/session metadata off SQLite-only assumptions
+- [ ] finish porting scheduler/cron/session metadata onto the Surreal contract
 - [ ] wire Daytona runtime selection into actual command/tool execution
 - [ ] let the agent create and update managed skills automatically after useful
   task completions
@@ -48,5 +47,4 @@ Status key:
 - [ ] Discord and WhatsApp still look thin compared with Telegram
 - [ ] browser/tool surface is broad; security policy coverage should keep growing
 - [ ] swarm and storage layers are moving faster than the user-facing docs
-- [ ] Surreal remains feature-gated today, so the default build still needs a
-  clearer migration story
+- [ ] keep the default build aligned with the Surreal-backed storage contract

@@ -7,7 +7,7 @@ Last updated: 2026-03-18
 - keep the local-first runtime stable while `main` stays focused on the
   single-machine experience
 - finish the storage migration posture so SurrealDB + RocksDB is the primary
-  path and SQLite is just the fallback
+  path
 - start wiring Hermes-inspired runtime pieces into the actual execution path:
   toolsets, managed skills, session search, and runtime adapters
 - add more regression tests around channels and provider retry behavior
@@ -19,7 +19,7 @@ Last updated: 2026-03-18
 - add stronger tests around channels, gateway auth, and loop behavior
 - make swarm state more visible and easier to operate
 - wire Daytona-style isolated runtime execution behind a Rust runtime adapter
-- move scheduler/session/control metadata onto the unified storage contract
+- move scheduler/session/control metadata onto the unified Surreal contract
 
 ## Later
 

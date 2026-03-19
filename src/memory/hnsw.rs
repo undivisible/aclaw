@@ -1,4 +1,4 @@
-//! HNSW vector index on top of SQLite embeddings.
+//! HNSW vector index on top of Surreal-backed embeddings.
 //! Pure Rust implementation — no external deps.
 //! Hierarchical Navigable Small World graph for ANN search.
 

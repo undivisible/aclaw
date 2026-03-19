@@ -245,7 +245,7 @@ impl AgentRunner {
             }
         }
 
-        // Load conversation history from SQLite
+        // Load conversation history from the active memory backend
         let history = self
             .memory
             .get_conversation_history(&msg.chat_id, self.agent_config.max_history_messages)

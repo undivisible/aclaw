@@ -52,7 +52,7 @@ pub struct RateLimitStatus {
     pub tokens_reset: Option<String>,
 }
 
-/// Cost tracker (in-memory + SQLite persistence)
+/// Cost tracker (in-memory + persistent accounting hooks)
 pub struct CostTracker {
     costs: Arc<RwLock<Vec<CostRecord>>>,
     models: Arc<RwLock<Vec<ModelCost>>>,

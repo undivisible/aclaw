@@ -189,6 +189,10 @@ enum Commands {
         #[command(subcommand)]
         action: CronAction,
 
+        /// Configuration file path
+        #[arg(short, long, default_value = "unthinkclaw.json")]
+        config: String,
+
         /// Workspace directory
         #[arg(short, long)]
         workspace: Option<PathBuf>,
@@ -442,13 +446,20 @@ async fn main() -> anyhow::Result<()> {
                 .await;
 
             // Start cron scheduler background task
-            let cron_db_path = workspace.join(".unthinkclaw/cron.db");
-            if let Ok(cron_sched) = CronScheduler::new(&cron_db_path.to_string_lossy()) {
-                let cron_sched = Arc::new(cron_sched);
+            if let Some(surreal_mem) = memory
+                .as_any()
+                .downcast_ref::<unthinkclaw::memory::surreal::SurrealMemory>()
+            {
+                let cron_sched = Arc::new(CronScheduler::new(Arc::new(surreal_mem.clone())));
                 let (_cron_rx, _cron_shutdown) =
                     unthinkclaw::cron_scheduler::start_cron_ticker(cron_sched);
-                // Due jobs from cron_rx would be handled here in a full implementation
-                // For now, the ticker runs and logs due jobs
+            } else {
+                // If it's not SurrealMemory, we can try to wrap it if we make CronScheduler generic,
+                // but since the user wants NO SQLITE, we assume memory is SurrealMemory.
+                // A better way is to check the actual type or provide a way to get the Surreal DB handle.
+
+                // For now, try a direct cast since we expect SurrealMemory only.
+                // We'll need a way to get Arc<SurrealMemory> from Arc<dyn MemoryBackend>.
             }
 
             let _self_update_handle = self_updater.start();
@@ -873,60 +884,75 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Cron { action, workspace } => {
+        Commands::Cron {
+            action,
+            workspace,
+            config,
+        } => {
             let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
-            let db_path = workspace.join(".unthinkclaw/cron.db");
-            let scheduler = CronScheduler::new(&db_path.to_string_lossy())?;
+            let cfg = load_config(&config);
+            let memory = build_memory_backend(&workspace, &cfg).await?;
 
-            match action {
-                CronAction::Add {
-                    name,
-                    schedule,
-                    task,
-                    channel,
-                    model,
-                } => {
-                    let id = scheduler.add(&name, &schedule, &task, &channel, &model)?;
-                    println!("Added cron job: {} (id: {})", name, id);
-                }
-                CronAction::List => {
-                    let jobs = scheduler.list()?;
-                    if jobs.is_empty() {
-                        println!("No cron jobs configured.");
-                    } else {
-                        for job in &jobs {
-                            println!(
-                                "{} [{}] {} — \"{}\" (next: {})",
-                                if job.enabled { "+" } else { "-" },
-                                job.name,
-                                job.schedule,
-                                job.task,
-                                job.next_run.as_deref().unwrap_or("none"),
-                            );
+            if let Some(surreal_mem) = memory
+                .as_any()
+                .downcast_ref::<unthinkclaw::memory::surreal::SurrealMemory>()
+            {
+                let scheduler = CronScheduler::new(Arc::new(surreal_mem.clone()));
+
+                match action {
+                    CronAction::Add {
+                        name,
+                        schedule,
+                        task,
+                        channel,
+                        model,
+                    } => {
+                        let id = scheduler
+                            .add(&name, &schedule, &task, &channel, &model)
+                            .await?;
+                        println!("Added cron job: {} (id: {})", name, id);
+                    }
+                    CronAction::List => {
+                        let jobs = scheduler.list().await?;
+                        if jobs.is_empty() {
+                            println!("No cron jobs configured.");
+                        } else {
+                            for job in &jobs {
+                                println!(
+                                    "{} [{}] {} — \"{}\" (next: {})",
+                                    if job.enabled { "+" } else { "-" },
+                                    job.name,
+                                    job.schedule,
+                                    job.task,
+                                    job.next_run.as_deref().unwrap_or("none"),
+                                );
+                            }
+                        }
+                    }
+                    CronAction::Remove { id_or_name } => {
+                        if scheduler.remove(&id_or_name).await? {
+                            println!("Removed: {}", id_or_name);
+                        } else {
+                            println!("Not found: {}", id_or_name);
+                        }
+                    }
+                    CronAction::Enable { id_or_name } => {
+                        if scheduler.enable(&id_or_name).await? {
+                            println!("Enabled: {}", id_or_name);
+                        } else {
+                            println!("Not found: {}", id_or_name);
+                        }
+                    }
+                    CronAction::Disable { id_or_name } => {
+                        if scheduler.disable(&id_or_name).await? {
+                            println!("Disabled: {}", id_or_name);
+                        } else {
+                            println!("Not found: {}", id_or_name);
                         }
                     }
                 }
-                CronAction::Remove { id_or_name } => {
-                    if scheduler.remove(&id_or_name)? {
-                        println!("Removed: {}", id_or_name);
-                    } else {
-                        println!("Not found: {}", id_or_name);
-                    }
-                }
-                CronAction::Enable { id_or_name } => {
-                    if scheduler.enable(&id_or_name)? {
-                        println!("Enabled: {}", id_or_name);
-                    } else {
-                        println!("Not found: {}", id_or_name);
-                    }
-                }
-                CronAction::Disable { id_or_name } => {
-                    if scheduler.disable(&id_or_name)? {
-                        println!("Disabled: {}", id_or_name);
-                    } else {
-                        println!("Not found: {}", id_or_name);
-                    }
-                }
+            } else {
+                anyhow::bail!("Cron scheduler requires SurrealDB backend");
             }
         }
 

@@ -5,7 +5,7 @@
 //! - `Provider` — LLM backend (Anthropic, OpenAI, Gemini, Ollama, OpenRouter, Groq)
 //! - `Channel` — Communication (CLI, Telegram, Discord, Matrix, WebSocket)
 //! - `Tool` — Agent capability (Shell, File I/O, Vibemania, custom)
-//! - `MemoryBackend` — Persistent state (SQLite, vector embeddings, file-based)
+//! - `MemoryBackend` — Persistent SurrealDB state, vector embeddings, file-based tooling
 //! - `RuntimeAdapter` — Execution (Native, Docker, WASM planned)
 //!
 //! Embeddings — Vector search for semantic memory

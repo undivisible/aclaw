@@ -11,7 +11,7 @@ Scope: entire repository.
 
 ## 1) Project Snapshot
 
-unthinkclaw is a lean, fast Rust AI agent runtime — Telegram-first, trait-driven, and moving toward SurrealDB + RocksDB as the primary state layer.
+unthinkclaw is a lean, fast Rust AI agent runtime — Telegram-first, trait-driven, and using SurrealDB + RocksDB as the primary state layer.
 
 Goals:
 - Small binary (<10MB), fast startup (<10ms), low RAM (<10MB)
@@ -24,7 +24,7 @@ Key extension points:
 - `src/providers/traits.rs` — AI model providers
 - `src/channels/traits.rs` — messaging channels
 - `src/tools/traits.rs` — tool execution
-- `src/memory/` — memory backends (SurrealDB + RocksDB target, SQLite fallback)
+- `src/memory/` — memory backends (SurrealDB + RocksDB)
 
 ## 2) Architecture
 
@@ -37,7 +37,7 @@ src/
   channels/            — Telegram, Discord, Slack, CLI, etc.
   providers/           — Anthropic, OpenAI-compat, Ollama, Copilot
   tools/               — shell, file_ops, web_search, web_fetch, edit, vibemania
-  memory/              — Surreal/SQLite backends (history, cache, retrieval)
+  memory/              — SurrealDB-backed history, cache, retrieval
   swarm.rs             — parallel sub-agent spawning
   cron_scheduler.rs    — scheduled tasks
   heartbeat.rs         — periodic background checks
@@ -53,7 +53,6 @@ src/
 
 ### 3.1 Async-First
 - All I/O must use `tokio` async primitives
-- SQLite fallback calls go through `spawn_blocking` — never block the tokio thread pool
 - Voice/audio transcription uses `tokio::process::Command`, not `std::process::Command`
 
 ### 3.2 KISS
@@ -78,10 +77,6 @@ src/
 
 ### Memory
 - SurrealDB + RocksDB is the intended primary backend direction
-- SQLite remains a fallback/dev path during migration
-- SQLite uses WAL mode + NORMAL sync for performance
-- SQLite FTS5 powers the fallback full-text path
-- SQLite DB ops go through `spawn_blocking`
 - Sticker cache: `sticker_id → description` (avoids re-analysis)
 - Conversation history: last 20 messages per chat_id, loaded on each request
 
@@ -172,7 +167,6 @@ cargo test
 ## 10) Anti-Patterns (Do Not)
 
 - Do not call `std::process::Command` in async context — use `tokio::process::Command`
-- Do not call SQLite fallback directly from async — use `spawn_blocking`
 - Do not drop progress channel receivers
 - Do not use global asterisk counting for markdown — use state machine
 - Do not add heavy dependencies for minor convenience

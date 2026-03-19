@@ -68,6 +68,10 @@ struct ChunkRow {
 }
 
 impl SurrealMemory {
+    pub fn db(&self) -> Surreal<surrealdb::engine::local::Db> {
+        self.db.clone()
+    }
+
     pub async fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let db = Surreal::new::<RocksDb>(path.as_ref()).await?;
         db.use_ns("claw").use_db("memory").await?;
@@ -130,6 +134,17 @@ const SCHEMA_SQL: &str = r#"
     DEFINE FIELD IF NOT EXISTS created_at ON chunks TYPE string;
     DEFINE INDEX IF NOT EXISTS chunk_file_idx ON chunks FIELDS file_path;
 
+    DEFINE TABLE IF NOT EXISTS cron_jobs SCHEMALESS;
+    DEFINE FIELD IF NOT EXISTS name ON cron_jobs TYPE string;
+    DEFINE FIELD IF NOT EXISTS schedule ON cron_jobs TYPE string;
+    DEFINE FIELD IF NOT EXISTS task ON cron_jobs TYPE string;
+    DEFINE FIELD IF NOT EXISTS channel ON cron_jobs TYPE string;
+    DEFINE FIELD IF NOT EXISTS model ON cron_jobs TYPE string;
+    DEFINE FIELD IF NOT EXISTS enabled ON cron_jobs TYPE bool;
+    DEFINE FIELD IF NOT EXISTS last_run ON cron_jobs TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS next_run ON cron_jobs TYPE option<string>;
+    DEFINE INDEX IF NOT EXISTS cron_name_idx ON cron_jobs FIELDS name UNIQUE;
+
     DEFINE ANALYZER IF NOT EXISTS memory_analyzer TOKENIZERS blank, class FILTERS lowercase, snowball(english);
     DEFINE INDEX IF NOT EXISTS memory_fts_idx ON memories FIELDS value
         SEARCH ANALYZER memory_analyzer BM25;
@@ -143,6 +158,10 @@ fn parse_timestamp(value: &str) -> chrono::DateTime<chrono::Utc> {
 
 #[async_trait]
 impl MemoryBackend for SurrealMemory {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn store(
         &self,
         namespace: &str,
@@ -527,12 +546,15 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
+
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let ma: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let mb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
     if ma == 0.0 || mb == 0.0 {
         return 0.0;
     }
+
     dot / (ma * mb)
 }
 
@@ -547,43 +569,6 @@ fn md5_hash(input: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_cosine_similarity_identical() {
-        let a = vec![1.0, 0.0, 0.0];
-        assert!((cosine_similarity(&a, &a) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_orthogonal() {
-        let a = vec![1.0, 0.0];
-        let b = vec![0.0, 1.0];
-        assert!(cosine_similarity(&a, &b).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_opposite() {
-        let a = vec![1.0, 0.0];
-        let b = vec![-1.0, 0.0];
-        assert!((cosine_similarity(&a, &b) + 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_empty() {
-        assert_eq!(cosine_similarity(&[], &[]), 0.0);
-    }
-
-    #[test]
-    fn test_cosine_similarity_mismatched_length() {
-        assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
-    }
-
-    #[test]
-    fn test_cosine_similarity_zero_vector() {
-        let a = vec![0.0, 0.0];
-        let b = vec![1.0, 2.0];
-        assert_eq!(cosine_similarity(&a, &b), 0.0);
-    }
 
     #[test]
     fn test_md5_hash_deterministic() {

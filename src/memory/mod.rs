@@ -4,8 +4,6 @@
 pub mod embeddings;
 pub mod hnsw;
 pub mod search;
-pub mod sqlite;
-#[cfg(feature = "swarm")]
 pub mod surreal;
 pub mod traits;
 

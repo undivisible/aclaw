@@ -499,14 +499,13 @@ impl Channel for TelegramChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::sqlite::SqliteMemory;
+    use crate::memory::surreal::SurrealMemory;
 
     #[tokio::test]
     async fn sticker_cache_is_used_when_available() {
         let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("memory.db");
         let memory: Arc<dyn MemoryBackend> =
-            Arc::new(SqliteMemory::new(&db_path.to_string_lossy()).unwrap());
+            Arc::new(SurrealMemory::new(dir.path()).await.unwrap());
         memory
             .store_sticker_cache("uniq-1", "file-1", "🎨 cached sticker")
             .await

@@ -27,7 +27,7 @@ design.
 - the runtime path is not yet uniformly Surreal-first across the rest of the
   repository
 - storage contracts are still split between newer swarm storage and older
-  SQLite-shaped runtime paths
+  runtime assumptions
 - operator visibility is still thinner than the underlying storage model
 - distributed execution and isolation work are not complete
 

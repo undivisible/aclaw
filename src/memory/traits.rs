@@ -52,6 +52,9 @@ pub struct ConversationSearchHit {
 /// The core MemoryBackend trait.
 #[async_trait]
 pub trait MemoryBackend: Send + Sync {
+    /// For downcasting to concrete types
+    fn as_any(&self) -> &dyn std::any::Any;
+
     /// Store a key-value memory
     async fn store(
         &self,

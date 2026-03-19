@@ -93,7 +93,7 @@ pub struct SelfUpdateConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
-    pub backend: String, // "surreal" | "sqlite" | "auto"
+    pub backend: String, // "surreal"
     pub root: PathBuf,
 }
 
@@ -246,7 +246,7 @@ impl Default for SelfUpdateConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            backend: "auto".to_string(),
+            backend: "surreal".to_string(),
             root: PathBuf::from(".unthinkclaw"),
         }
     }

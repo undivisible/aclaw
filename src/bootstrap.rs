@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::config::{Config, ToolsetConfig};
 use crate::memory::embeddings::{create_embedding_provider, EmbeddingProvider};
 use crate::memory::search::{MemoryGetTool, MemorySearchTool, SessionSearchTool};
-use crate::memory::sqlite::SqliteMemory;
+use crate::memory::surreal::SurrealMemory;
 use crate::memory::MemoryBackend;
 use crate::policy::ExecutionPolicy;
 #[cfg(feature = "provider-anthropic")]
@@ -221,42 +221,16 @@ pub async fn build_memory_backend(
     let storage_root = workspace.join(&cfg.storage.root);
     std::fs::create_dir_all(&storage_root)?;
     let backend = cfg.storage.backend.trim().to_ascii_lowercase();
-
-    match backend.as_str() {
-        "sqlite" => Ok(Arc::new(SqliteMemory::new(
-            &storage_root.join("memory.db").to_string_lossy(),
-        )?)),
-        #[cfg(feature = "swarm")]
-        "surreal" => {
-            let surreal_path = storage_root.join("memory.surreal");
-            let memory = crate::memory::surreal::SurrealMemory::new(surreal_path.as_path()).await?;
-            Ok(Arc::new(memory))
-        }
-        #[cfg(not(feature = "swarm"))]
-        "surreal" => anyhow::bail!(
-            "storage.backend=surreal requires building with --features swarm for SurrealDB + RocksDB support"
-        ),
-        _ => {
-            #[cfg(feature = "swarm")]
-            {
-                let surreal_path = storage_root.join("memory.surreal");
-                if let Ok(memory) =
-                    crate::memory::surreal::SurrealMemory::new(surreal_path.as_path()).await
-                {
-                    return Ok(Arc::new(memory));
-                }
-            }
-
-            tracing::warn!(
-                backend = %backend,
-                "falling back to SQLite memory backend; build with --features swarm to use SurrealDB + RocksDB"
-            );
-
-            Ok(Arc::new(SqliteMemory::new(
-                &storage_root.join("memory.db").to_string_lossy(),
-            )?))
-        }
+    if backend != "surreal" {
+        anyhow::bail!(
+            "storage.backend={} is not supported; only surreal is available",
+            cfg.storage.backend
+        );
     }
+
+    let surreal_path = storage_root.join("memory.surreal");
+    let memory = SurrealMemory::new(surreal_path.as_path()).await?;
+    Ok(Arc::new(memory))
 }
 
 fn resolve_openclaw_token(provider: &str) -> anyhow::Result<String> {
