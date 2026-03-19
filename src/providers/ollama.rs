@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use super::retry::send_with_retry;
 use super::traits::*;
+use crate::text::truncate_chars;
 
 pub struct OllamaProvider {
     base_url: String,
@@ -67,7 +68,7 @@ impl Provider for OllamaProvider {
 
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Ollama error: {}", &text[..text.len().min(200)]);
+            anyhow::bail!("Ollama error: {}", truncate_chars(&text, 200));
         }
 
         let data: Value = resp.json().await?;

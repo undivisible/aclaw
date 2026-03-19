@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::traits::*;
 use crate::agent::AgentRunner;
+use crate::text::truncate_chars;
 
 /// session_status — view/change model, check status
 pub struct SessionStatusTool {
@@ -141,7 +142,7 @@ impl Tool for ListModelsTool {
             return Ok(ToolResult::error(format!(
                 "API error {}: {}",
                 status,
-                &text[..text.len().min(300)]
+                truncate_chars(&text, 300)
             )));
         }
 

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use super::traits::*;
 use crate::policy::ExecutionPolicy;
+use crate::text::truncate_chars;
 
 pub struct ShellTool {
     workspace: PathBuf,
@@ -161,7 +162,7 @@ impl Tool for ShellTool {
         let truncated = if result.len() > 20_000 {
             format!(
                 "{}...\n[truncated {} chars]",
-                &result[..20_000],
+                truncate_chars(&result, 20_000),
                 result.len() - 20_000
             )
         } else {

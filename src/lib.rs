@@ -37,6 +37,7 @@ pub mod skills;
 #[cfg(feature = "swarm")]
 pub mod swarm;
 pub mod telegram_runtime;
+pub mod text;
 pub mod tools;
 
 pub use agent::AgentRunner;

@@ -3,13 +3,24 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
+use super::network::validate_public_http_url;
 use super::traits::*;
+use crate::text::truncate_chars;
 
-pub struct WebFetchTool;
+pub struct WebFetchTool {
+    client: reqwest::Client,
+}
 
 impl WebFetchTool {
     pub fn new() -> Self {
-        Self
+        Self {
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .user_agent("unthinkclaw/0.1")
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("Failed to create HTTP client"),
+        }
     }
 }
 
@@ -60,12 +71,9 @@ impl Tool for WebFetchTool {
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
         let args: FetchArgs = serde_json::from_str(arguments)?;
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent("unthinkclaw/0.1")
-            .build()?;
+        let _ = validate_public_http_url(&args.url, &[]).await?;
 
-        let resp = match client.get(&args.url).send().await {
+        let resp = match self.client.get(&args.url).send().await {
             Ok(r) => r,
             Err(e) => return Ok(ToolResult::error(format!("Fetch error: {}", e))),
         };
@@ -74,7 +82,20 @@ impl Tool for WebFetchTool {
             return Ok(ToolResult::error(format!("HTTP {}", resp.status())));
         }
 
-        let text = resp.text().await.unwrap_or_default();
+        const MAX_BYTES: usize = 1_048_576;
+        let bytes = match resp.bytes().await {
+            Ok(bytes) => bytes,
+            Err(e) => return Ok(ToolResult::error(format!("Fetch error: {}", e))),
+        };
+        if bytes.len() > MAX_BYTES {
+            return Ok(ToolResult::error(format!(
+                "Response too large: {} bytes (max {})",
+                bytes.len(),
+                MAX_BYTES
+            )));
+        }
+
+        let text = String::from_utf8_lossy(&bytes);
 
         // Simple HTML stripping (remove tags, decode entities)
         let cleaned = strip_html(&text);
@@ -82,7 +103,7 @@ impl Tool for WebFetchTool {
         let truncated = if cleaned.len() > args.max_chars {
             format!(
                 "{}...\n[truncated at {} chars]",
-                &cleaned[..args.max_chars],
+                truncate_chars(&cleaned, args.max_chars),
                 args.max_chars
             )
         } else {

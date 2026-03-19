@@ -957,28 +957,7 @@ fn origin_allowed(config: &GatewayConfig, headers: &HeaderMap) -> bool {
         .any(|allowed| allowed.eq_ignore_ascii_case(origin))
 }
 
-fn client_identity(config: &GatewayConfig, headers: &HeaderMap, token: &str) -> String {
-    if !config.trusted_proxies.is_empty() {
-        if let Some(forwarded) = headers
-            .get("x-forwarded-for")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split(',').next())
-        {
-            return format!("{}:{}", token, forwarded.trim());
-        }
-    }
-    if let Some(real_ip) = headers
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-    {
-        return format!("{}:{}", token, real_ip.trim());
-    }
-    if let Some(origin) = headers
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-    {
-        return format!("{}:{}", token, origin.trim());
-    }
+fn client_identity(_config: &GatewayConfig, _headers: &HeaderMap, token: &str) -> String {
     token.to_string()
 }
 
@@ -1006,6 +985,9 @@ pub async fn start_gateway(
     config: GatewayConfig,
     auth_token: &str,
 ) -> anyhow::Result<()> {
+    if auth_token.trim().is_empty() {
+        anyhow::bail!("gateway auth token must be configured");
+    }
     let gateway = Gateway::new(config, auth_token);
     let app = gateway.router();
 
@@ -1022,6 +1004,9 @@ pub async fn start_gateway_with_runtime(
     auth_token: &str,
     hosted_runtime: Arc<HostedRuntime>,
 ) -> anyhow::Result<()> {
+    if auth_token.trim().is_empty() {
+        anyhow::bail!("gateway auth token must be configured");
+    }
     let gateway = Gateway::new(config, auth_token).with_runtime(hosted_runtime);
     let app = gateway.router();
 

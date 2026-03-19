@@ -4,7 +4,7 @@ use serde_json::json;
 use reqwest::{Client, Method};
 use anyhow::{anyhow, Context};
 use std::time::Duration;
-use std::net::IpAddr;
+use super::network::validate_public_http_url;
 
 pub struct HttpRequestTool {
     client: Client,
@@ -15,6 +15,7 @@ impl HttpRequestTool {
     pub fn new(allowed_domains: Vec<String>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("Failed to create HTTP client");
         
@@ -22,59 +23,6 @@ impl HttpRequestTool {
             client,
             allowed_domains,
         }
-    }
-
-    fn is_private_ip(&self, ip: IpAddr) -> bool {
-        match ip {
-            IpAddr::V4(ipv4) => {
-                let octets = ipv4.octets();
-                // 127.x.x.x (loopback)
-                octets[0] == 127 ||
-                // 10.x.x.x (private)
-                octets[0] == 10 ||
-                // 172.16.x.x - 172.31.x.x (private)
-                (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||
-                // 192.168.x.x (private)
-                (octets[0] == 192 && octets[1] == 168) ||
-                // 169.254.x.x (link-local)
-                (octets[0] == 169 && octets[1] == 254)
-            },
-            IpAddr::V6(ipv6) => {
-                // ::1 (loopback) or fc00::/7 (unique local)
-                ipv6.is_loopback() || ((ipv6.segments()[0] & 0xfe00) == 0xfc00)
-            }
-        }
-    }
-
-    fn validate_url(&self, url: &str) -> anyhow::Result<()> {
-        let parsed = reqwest::Url::parse(url)
-            .context("Invalid URL")?;
-
-        // Check if localhost
-        if let Some(host) = parsed.host_str() {
-            if host == "localhost" || host == "0.0.0.0" {
-                return Err(anyhow!("Requests to localhost are blocked"));
-            }
-
-            // Check if domain is allowed (if allowed_domains is not empty)
-            if !self.allowed_domains.is_empty() {
-                let allowed = self.allowed_domains.iter().any(|domain| {
-                    host == domain || host.ends_with(&format!(".{}", domain))
-                });
-                if !allowed {
-                    return Err(anyhow!("Domain {} is not in allowed list", host));
-                }
-            }
-
-            // Try to resolve and check for private IPs
-            if let Ok(ip) = host.parse::<IpAddr>() {
-                if self.is_private_ip(ip) {
-                    return Err(anyhow!("Requests to private IP addresses are blocked"));
-                }
-            }
-        }
-
-        Ok(())
     }
 
     fn redact_sensitive_headers(&self, headers: &reqwest::header::HeaderMap) -> serde_json::Value {
@@ -148,7 +96,7 @@ impl Tool for HttpRequestTool {
             .ok_or_else(|| anyhow!("Missing url"))?;
 
         // Validate URL
-        if let Err(e) = self.validate_url(url) {
+        if let Err(e) = validate_public_http_url(url, &self.allowed_domains).await {
             return Ok(ToolResult::error(format!("URL validation failed: {}", e)));
         }
 

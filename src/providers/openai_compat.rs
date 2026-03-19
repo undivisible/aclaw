@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use super::retry::send_with_retry;
 use super::traits::*;
+use crate::text::truncate_chars;
 use crate::tools::ToolSpec;
 
 pub struct OpenAiCompatProvider {
@@ -200,7 +201,7 @@ impl Provider for OpenAiCompatProvider {
                 "{} API error {}: {}",
                 self.provider_name,
                 status,
-                &text[..text.len().min(200)]
+                truncate_chars(&text, 200)
             );
         }
 

@@ -26,11 +26,14 @@ impl ComposioTool {
     async fn make_request(
         &self,
         method: &str,
-        endpoint: &str,
+        url: reqwest::Url,
         body: Option<serde_json::Value>,
     ) -> anyhow::Result<serde_json::Value> {
+        let base_path = url.path().to_string();
+
         // Try v3 first
-        let v3_url = format!("https://backend.composio.dev/api/v3{}", endpoint);
+        let mut v3_url = url.clone();
+        v3_url.set_path(&format!("/api/v3{}", base_path));
         let v3_result = self.try_request(method, &v3_url, body.clone()).await;
         
         if v3_result.is_ok() {
@@ -38,14 +41,15 @@ impl ComposioTool {
         }
 
         // Fallback to v2
-        let v2_url = format!("https://backend.composio.dev/api/v2{}", endpoint);
+        let mut v2_url = url;
+        v2_url.set_path(&format!("/api/v2{}", base_path));
         self.try_request(method, &v2_url, body).await
     }
 
     async fn try_request(
         &self,
         method: &str,
-        url: &str,
+        url: &reqwest::Url,
         body: Option<serde_json::Value>,
     ) -> anyhow::Result<serde_json::Value> {
         let mut request = match method.to_uppercase().as_str() {
@@ -81,13 +85,12 @@ impl ComposioTool {
     }
 
     async fn list_actions(&self, tool_name: Option<&str>) -> anyhow::Result<String> {
-        let endpoint = if let Some(tool) = tool_name {
-            format!"/tools?name={}", tool)
-        } else {
-            "/tools".to_string()
-        };
-
-        let response = self.make_request("GET", &endpoint, None).await?;
+        let mut url = reqwest::Url::parse("https://backend.composio.dev/tools")
+            .context("Failed to build Composio URL")?;
+        if let Some(tool) = tool_name {
+            url.query_pairs_mut().append_pair("name", tool);
+        }
+        let response = self.make_request("GET", url, None).await?;
         Ok(serde_json::to_string_pretty(&response)?)
     }
 
@@ -98,6 +101,8 @@ impl ComposioTool {
         entity_id: Option<&str>,
     ) -> anyhow::Result<String> {
         let endpoint = format!("/actions/{}/execute", action_name);
+        let url = reqwest::Url::parse(&format!("https://backend.composio.dev{}", endpoint))
+            .context("Failed to build Composio URL")?;
         
         let mut body = json!({
             "input": params,
@@ -107,7 +112,7 @@ impl ComposioTool {
             body["entityId"] = json!(entity);
         }
 
-        let response = self.make_request("POST", &endpoint, Some(body)).await?;
+        let response = self.make_request("POST", url, Some(body)).await?;
         Ok(serde_json::to_string_pretty(&response)?)
     }
 }

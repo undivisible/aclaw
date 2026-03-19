@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::traits::*;
+use crate::text::truncate_chars;
 use crate::tools::ToolSpec;
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
@@ -172,7 +173,7 @@ impl Provider for CopilotProvider {
             anyhow::bail!(
                 "Copilot API error {}: {}",
                 status,
-                &text[..text.len().min(300)]
+                truncate_chars(&text, 300)
             );
         }
 

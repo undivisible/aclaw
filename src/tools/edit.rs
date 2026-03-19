@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use super::sandbox::resolve_workspace_existing_path;
 use super::traits::*;
 
 pub struct EditTool {
@@ -64,25 +65,11 @@ impl Tool for EditTool {
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
         let args: EditArgs = serde_json::from_str(arguments)?;
 
-        // Resolve path
-        let full_path = if args.path.starts_with('/') {
-            PathBuf::from(&args.path)
-        } else {
-            self.workspace.join(&args.path)
+        let full_path = match resolve_workspace_existing_path(&self.workspace, &args.path) {
+            Ok(path) => path,
+            Err(err) => return Ok(ToolResult::error(err.to_string())),
         };
 
-        // Security: check path is within workspace for relative paths
-        if !args.path.starts_with('/') {
-            if let (Ok(canonical_ws), Ok(canonical_file)) =
-                (self.workspace.canonicalize(), full_path.canonicalize())
-            {
-                if !canonical_file.starts_with(&canonical_ws) {
-                    return Ok(ToolResult::error("Path traversal not allowed"));
-                }
-            }
-        }
-
-        // Read file
         let content = match tokio::fs::read_to_string(&full_path).await {
             Ok(c) => c,
             Err(e) => {

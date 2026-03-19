@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use super::traits::*;
+use crate::text::truncate_chars;
 
 pub struct WebSearchTool {
     api_key: Option<String>,
@@ -85,7 +86,7 @@ impl Tool for WebSearchTool {
             return Ok(ToolResult::error(format!(
                 "Search API error {}: {}",
                 status,
-                &text[..text.len().min(200)]
+                truncate_chars(&text, 200)
             )));
         }
 

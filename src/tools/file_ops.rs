@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use super::sandbox::{resolve_workspace_existing_path, resolve_workspace_write_path};
 use super::traits::*;
+use crate::text::truncate_chars;
 
 // ============================================================
 // Read tool — read file contents with optional offset/limit
@@ -17,30 +19,6 @@ pub struct FileReadTool {
 impl FileReadTool {
     pub fn new(workspace: PathBuf) -> Self {
         Self { workspace }
-    }
-
-    fn resolve_path(&self, path: &str) -> anyhow::Result<PathBuf> {
-        let path = path.trim();
-        let requested = if path.starts_with('/') {
-            PathBuf::from(path)
-        } else if path.starts_with('~') {
-            anyhow::bail!("Home directory expansion (~) is disabled for security.");
-        } else {
-            self.workspace.join(path)
-        };
-
-        // Canonicalize to resolve .. and symlinks
-        let canonical_workspace = self
-            .workspace
-            .canonicalize()
-            .unwrap_or_else(|_| self.workspace.clone());
-        let canonical_requested = requested.canonicalize().unwrap_or(requested);
-
-        if !canonical_requested.starts_with(&canonical_workspace) {
-            anyhow::bail!("Access denied: path '{}' is outside the workspace.", path);
-        }
-
-        Ok(canonical_requested)
     }
 }
 
@@ -88,7 +66,7 @@ impl Tool for FileReadTool {
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
         let args: ReadArgs = serde_json::from_str(arguments)?;
-        let full_path = match self.resolve_path(&args.path) {
+        let full_path = match resolve_workspace_existing_path(&self.workspace, &args.path) {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::error(e.to_string())),
         };
@@ -107,7 +85,10 @@ impl Tool for FileReadTool {
 
                 // Truncate if too large
                 let truncated = if result.len() > 50_000 {
-                    format!("{}...\n[truncated at 50KB]", &result[..50_000])
+                    format!(
+                        "{}...\n[truncated at 50KB]",
+                        truncate_chars(&result, 50_000)
+                    )
                 } else {
                     result
                 };
@@ -143,44 +124,6 @@ pub struct FileWriteTool {
 impl FileWriteTool {
     pub fn new(workspace: PathBuf) -> Self {
         Self { workspace }
-    }
-
-    fn resolve_path(&self, path: &str) -> anyhow::Result<PathBuf> {
-        let path = path.trim();
-        let requested = if path.starts_with('/') {
-            PathBuf::from(path)
-        } else if path.starts_with('~') {
-            anyhow::bail!("Home directory expansion (~) is disabled for security.");
-        } else {
-            self.workspace.join(path)
-        };
-
-        // For writing, we can't always canonicalize the file if it doesn't exist yet,
-        // so we canonicalize the parent.
-        let canonical_workspace = self
-            .workspace
-            .canonicalize()
-            .unwrap_or_else(|_| self.workspace.clone());
-
-        // Use components to check for .. traversal if file doesn't exist
-        let mut normalized = canonical_workspace.clone();
-        for component in requested.components() {
-            match component {
-                std::path::Component::Normal(c) => normalized.push(c),
-                std::path::Component::ParentDir => {
-                    normalized.pop();
-                }
-                std::path::Component::RootDir
-                | std::path::Component::Prefix(_)
-                | std::path::Component::CurDir => {}
-            }
-        }
-
-        if !normalized.starts_with(&canonical_workspace) {
-            anyhow::bail!("Access denied: path '{}' is outside the workspace.", path);
-        }
-
-        Ok(normalized)
     }
 }
 
@@ -220,7 +163,7 @@ impl Tool for FileWriteTool {
 
     async fn execute(&self, arguments: &str) -> anyhow::Result<ToolResult> {
         let args: WriteArgs = serde_json::from_str(arguments)?;
-        let full_path = match self.resolve_path(&args.path) {
+        let full_path = match resolve_workspace_write_path(&self.workspace, &args.path) {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::error(e.to_string())),
         };

@@ -7,6 +7,7 @@ use serde_json::Value;
 use super::retry::send_with_retry;
 use super::traits::*;
 use crate::cost::{CostTracker, TokenUsage};
+use crate::text::truncate_chars;
 use crate::tools::ToolSpec;
 
 pub struct AnthropicProvider {
@@ -237,7 +238,7 @@ impl Provider for AnthropicProvider {
             anyhow::bail!(
                 "Anthropic API error {}: {}",
                 status,
-                &text[..text.len().min(200)]
+                truncate_chars(&text, 200)
             );
         }
 

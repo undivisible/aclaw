@@ -17,6 +17,8 @@ pub mod embeddings;
 pub mod file_ops;
 pub mod mcp;
 pub mod message;
+pub mod network;
+pub mod sandbox;
 pub mod session;
 pub mod shell;
 pub mod skill_manager;
