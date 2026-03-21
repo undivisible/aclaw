@@ -1,0 +1,32 @@
+{
+  "provider": {
+    "name": "anthropic",
+    "api_key": null
+  },
+  "model": "claude-sonnet-4-5",
+  "workspace": "/app/workspace",
+  "storage": {
+    "backend": "surreal",
+    "root": ".unthinkclaw"
+  },
+  "toolsets": {},
+  "policy": {},
+  "embeddings": {
+    "enabled": false,
+    "provider": "none",
+    "model": "",
+    "base_url": null,
+    "api_key": null
+  },
+  "runtime": {
+    "self_update": {
+      "enabled": false
+    }
+  },
+  "observability": {
+    "service_name": "unthinkclaw",
+    "environment": "production",
+    "json_logs": true,
+    "trace_header_name": "x-trace-id"
+  }
+}
