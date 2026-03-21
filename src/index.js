@@ -1,18 +1,18 @@
-import { Container } from "cloudflare:container";
+import { Container } from "@cloudflare/containers";
 
 export class UnthinkclawContainer extends Container {
 	defaultPort = 8080;
 	sleepAfter = "10m";
 
-	override onStart() {
+	onStart() {
 		console.log("unthinkclaw container started");
 	}
 
-	override onStop() {
+	onStop() {
 		console.log("unthinkclaw container stopped");
 	}
 
-	override onError(error) {
+	onError(error) {
 		console.error("unthinkclaw error:", error);
 	}
 }

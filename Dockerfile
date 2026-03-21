@@ -1,4 +1,4 @@
-FROM rust:1.82-slim AS builder
+FROM rust:latest AS builder
 RUN apt-get update && apt-get install -y pkg-config libclang-dev clang && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
