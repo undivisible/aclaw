@@ -1,12 +1,13 @@
 {
   "name": "unthinkclaw-agent",
-  "type": "container",
-  "main": "Dockerfile",
   "compatibility_date": "2024-03-21",
-  "containers": {
-    "command": ["./unthinkclaw", "--mcp"],
-    "image": "."
-  },
+  "containers": [
+    {
+      "name": "unthinkclaw-agent",
+      "image": ".",
+      "command": ["./unthinkclaw", "mcp"]
+    }
+  ],
   "vars": {
     "RUST_LOG": "info"
   }

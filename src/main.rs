@@ -115,6 +115,21 @@ enum Commands {
     /// Show runtime status
     Status,
 
+    /// Run as an MCP server over stdio (for Cloudflare Container or local use)
+    Mcp {
+        /// Configuration file path
+        #[arg(short, long, default_value = "unthinkclaw.json")]
+        config: String,
+
+        /// Workspace directory
+        #[arg(short, long)]
+        workspace: Option<PathBuf>,
+
+        /// Override the model
+        #[arg(short, long)]
+        model: Option<String>,
+    },
+
     /// Run one self-update cycle against the current repo
     SelfUpdate {
         /// Configuration file path
@@ -568,7 +583,38 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => {
             println!("unthinkclaw v{}", env!("CARGO_PKG_VERSION"));
             println!("Status: OK");
-            println!("Commands: chat, ask, doctor, audit, status, self-update, init, cron, swarm");
+            println!("Commands: chat, ask, doctor, audit, status, mcp, self-update, init, cron, swarm");
+        }
+
+        Commands::Mcp {
+            config,
+            workspace,
+            model,
+        } => {
+            let cfg = load_config(&config);
+            let model = model.unwrap_or(cfg.model.clone());
+            let workspace = workspace.unwrap_or(cfg.workspace.clone());
+
+            let provider = build_provider(&cfg);
+            let policy = Arc::new(ExecutionPolicy::from_config(&cfg.policy));
+            let memory = build_memory_backend(&workspace, &cfg).await?;
+            let embedding_provider = build_embedding_provider(&cfg)?;
+
+            let tools = build_base_tools(
+                &workspace,
+                Arc::clone(&policy),
+                memory,
+                embedding_provider,
+                &cfg.toolsets,
+            );
+
+            eprintln!(
+                "unthinkclaw v{} — MCP server mode ({})",
+                env!("CARGO_PKG_VERSION"),
+                model
+            );
+
+            unthinkclaw::mcp_server::run_mcp_server(tools, Some(provider), Some(model)).await?;
         }
 
         Commands::SelfUpdate { config, workspace } => {
@@ -1247,7 +1293,8 @@ fn config_path_for_cli(cli: &Cli) -> Option<String> {
         | Commands::Ask { config, .. }
         | Commands::Doctor { config, .. }
         | Commands::Audit { config, .. }
-        | Commands::SelfUpdate { config, .. } => Some(config.clone()),
+        | Commands::SelfUpdate { config, .. }
+        | Commands::Mcp { config, .. } => Some(config.clone()),
         _ => None,
     }
 }
