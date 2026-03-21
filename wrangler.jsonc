@@ -1,11 +1,26 @@
 {
   "name": "unthinkclaw-agent",
+  "main": "src/index.js",
   "compatibility_date": "2024-03-21",
   "containers": [
     {
-      "name": "unthinkclaw-agent",
-      "image": ".",
-      "command": ["./unthinkclaw", "mcp"]
+      "class_name": "UnthinkclawContainer",
+      "image": "./Dockerfile",
+      "max_instances": 3
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "UNTHINKCLAW",
+        "class_name": "UnthinkclawContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["UnthinkclawContainer"]
     }
   ],
   "vars": {

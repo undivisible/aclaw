@@ -115,7 +115,7 @@ enum Commands {
     /// Show runtime status
     Status,
 
-    /// Run as an MCP server over stdio (for Cloudflare Container or local use)
+    /// Run as an MCP server (stdio or HTTP for Cloudflare Container)
     Mcp {
         /// Configuration file path
         #[arg(short, long, default_value = "unthinkclaw.json")]
@@ -128,6 +128,10 @@ enum Commands {
         /// Override the model
         #[arg(short, long)]
         model: Option<String>,
+
+        /// Run in HTTP mode on this port (default: stdio mode)
+        #[arg(long)]
+        port: Option<u16>,
     },
 
     /// Run one self-update cycle against the current repo
@@ -590,6 +594,7 @@ async fn main() -> anyhow::Result<()> {
             config,
             workspace,
             model,
+            port,
         } => {
             let cfg = load_config(&config);
             let model = model.unwrap_or(cfg.model.clone());
@@ -608,13 +613,29 @@ async fn main() -> anyhow::Result<()> {
                 &cfg.toolsets,
             );
 
-            eprintln!(
-                "unthinkclaw v{} — MCP server mode ({})",
-                env!("CARGO_PKG_VERSION"),
-                model
-            );
-
-            unthinkclaw::mcp_server::run_mcp_server(tools, Some(provider), Some(model)).await?;
+            if let Some(port) = port {
+                eprintln!(
+                    "unthinkclaw v{} — MCP HTTP server on port {} ({})",
+                    env!("CARGO_PKG_VERSION"),
+                    port,
+                    model
+                );
+                unthinkclaw::mcp_server::run_mcp_server_http(
+                    tools,
+                    Some(provider),
+                    Some(model),
+                    port,
+                )
+                .await?;
+            } else {
+                eprintln!(
+                    "unthinkclaw v{} — MCP server mode ({})",
+                    env!("CARGO_PKG_VERSION"),
+                    model
+                );
+                unthinkclaw::mcp_server::run_mcp_server(tools, Some(provider), Some(model))
+                    .await?;
+            }
         }
 
         Commands::SelfUpdate { config, workspace } => {

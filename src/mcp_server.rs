@@ -1,6 +1,7 @@
-//! MCP server mode — exposes unthinkclaw as an MCP server over stdio.
+//! MCP server mode — exposes unthinkclaw as an MCP server over stdio or HTTP.
 //! Other AI clients can connect to prompt unthinkclaw or use its tools.
 
+use axum::{extract::State, response::IntoResponse, routing::{get, post}, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -68,8 +69,14 @@ fn tool_to_mcp_schema(spec: &ToolSpec) -> Value {
     })
 }
 
+#[derive(Clone)]
+struct McpState {
+    tools: Arc<Vec<Arc<dyn Tool>>>,
+    provider: Option<Arc<dyn crate::providers::traits::Provider>>,
+    model: Option<String>,
+}
+
 /// Run unthinkclaw as an MCP server over stdio.
-/// Exposes registered tools plus an "ask" tool for prompting the agent.
 pub async fn run_mcp_server(
     tools: Vec<Arc<dyn Tool>>,
     provider: Option<Arc<dyn crate::providers::traits::Provider>>,
@@ -78,6 +85,8 @@ pub async fn run_mcp_server(
     let stdin = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();
     let mut lines = stdin.lines();
+
+    let tools = Arc::new(tools);
 
     tracing::info!("MCP server started on stdio");
 
@@ -101,6 +110,43 @@ pub async fn run_mcp_server(
     }
 
     Ok(())
+}
+
+/// Run unthinkclaw as an MCP server over HTTP (for Cloudflare Container deployment).
+pub async fn run_mcp_server_http(
+    tools: Vec<Arc<dyn Tool>>,
+    provider: Option<Arc<dyn crate::providers::traits::Provider>>,
+    model: Option<String>,
+    port: u16,
+) -> anyhow::Result<()> {
+    let state = McpState {
+        tools: Arc::new(tools),
+        provider,
+        model,
+    };
+
+    let app = Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/mcp", post(handle_http_mcp))
+        .route("/", post(handle_http_mcp))
+        .with_state(state);
+
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+    tracing::info!("MCP HTTP server listening on {}", addr);
+    eprintln!("MCP HTTP server listening on {}", addr);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+async fn handle_http_mcp(
+    State(state): State<McpState>,
+    Json(request): Json<JsonRpcRequest>,
+) -> impl IntoResponse {
+    let response = handle_request(&request, &state.tools, &state.provider, &state.model).await;
+    Json(response)
 }
 
 async fn write_response(
