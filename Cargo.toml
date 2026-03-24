@@ -91,8 +91,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Embedded SurrealDB + RocksDB (primary memory backend)
-surrealdb = { version = "2", features = ["kv-rocksdb"] }
-rocksdb = { version = "0.22" }
+surrealdb = { version = "2.1", features = ["kv-rocksdb"] }
+rocksdb = { version = "0.23" }
 
 # Container management (optional — only if you need Docker isolation)
 bollard = { version = "0.18", optional = true }
