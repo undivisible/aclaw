@@ -54,40 +54,27 @@ async function sendMessage(token, chatId, text) {
 	}
 }
 
-// ── Anthropic helper ──────────────────────────────────────────────────────────
+// ── Agent call via container ───────────────────────────────────────────────────
 
-async function callAnthropic(apiKey, userText) {
-	// OAuth tokens (sk-ant-oat*) use Bearer auth; direct keys use x-api-key
-	const isOAuth = apiKey.startsWith("sk-ant-oat");
-	const authHeaders = isOAuth
-		? { Authorization: `Bearer ${apiKey}` }
-		: { "x-api-key": apiKey };
-
-	const res = await fetch("https://api.anthropic.com/v1/messages", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"anthropic-version": "2023-06-01",
-			...authHeaders,
-		},
-		body: JSON.stringify({
-			model: "claude-sonnet-4-6",
-			max_tokens: 2048,
-			system: "You are a helpful AI assistant. Be concise and clear.",
-			messages: [{ role: "user", content: userText }],
-		}),
-	});
-
-	const data = await res.json();
+async function callAgent(containerStub, chatId, text) {
+	const res = await containerStub.fetch(
+		new Request("http://container/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ text, chat_id: String(chatId) }),
+		})
+	);
 	if (!res.ok) {
-		throw new Error(data.error?.message ?? `Anthropic ${res.status}`);
+		const body = await res.text().catch(() => res.status.toString());
+		throw new Error(`Agent error ${res.status}: ${body}`);
 	}
-	return data.content?.[0]?.text ?? "(no response)";
+	const data = await res.json();
+	return data.text ?? "(no response)";
 }
 
 // ── Bot logic ─────────────────────────────────────────────────────────────────
 
-async function handleUpdate(env, update) {
+async function handleUpdate(env, update, containerStub) {
 	const msg = update?.message ?? update?.edited_message;
 	if (!msg) return;
 
@@ -101,7 +88,7 @@ async function handleUpdate(env, update) {
 		action: "typing",
 	});
 
-	const reply = await callAnthropic(env.ANTHROPIC_API_KEY, text);
+	const reply = await callAgent(containerStub, chatId, text);
 	await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, reply);
 }
 
@@ -115,12 +102,16 @@ export default {
 			return new Response("ok");
 		}
 
+		// Get container stub (shared for both webhook and MCP routes)
+		const id = env.UNTHINKCLAW.idFromName("default");
+		const stub = env.UNTHINKCLAW.get(id);
+
 		if (url.pathname === "/webhook" && request.method === "POST") {
 			const update = await request.json().catch(() => null);
 			if (update) {
 				// Process in background — return 200 to Telegram immediately
 				ctx.waitUntil(
-					handleUpdate(env, update).catch((err) =>
+					handleUpdate(env, update, stub).catch((err) =>
 						console.error("bot error:", err.message)
 					)
 				);
@@ -129,8 +120,6 @@ export default {
 		}
 
 		// All other routes → container (MCP server)
-		const id = env.UNTHINKCLAW.idFromName("default");
-		const stub = env.UNTHINKCLAW.get(id);
 		return stub.fetch(request);
 	},
 };

@@ -611,12 +611,20 @@ async fn main() -> anyhow::Result<()> {
             let tools = build_base_tools(
                 &workspace,
                 Arc::clone(&policy),
-                memory,
+                Arc::clone(&memory),
                 embedding_provider,
                 &cfg.toolsets,
             );
 
             if let Some(port) = port {
+                let system_prompt = cfg.system_prompt.clone();
+                let runner = Arc::new(unthinkclaw::agent::loop_runner::AgentRunner::new(
+                    Arc::clone(&provider),
+                    tools.clone(),
+                    Arc::clone(&memory),
+                    system_prompt,
+                    model.clone(),
+                ));
                 eprintln!(
                     "unthinkclaw v{} — MCP HTTP server on port {} ({})",
                     env!("CARGO_PKG_VERSION"),
@@ -627,6 +635,7 @@ async fn main() -> anyhow::Result<()> {
                     tools,
                     Some(provider),
                     Some(model),
+                    Some(runner),
                     port,
                 )
                 .await?;

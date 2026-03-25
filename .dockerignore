@@ -1,0 +1,22 @@
+# Worker JS — not needed in the Rust container
+src/index.js
+src/*.js
+
+# Wrangler / CF artifacts
+.wrangler/
+node_modules/
+
+# Dev files
+.env
+.env.*
+*.md
+docs/
+skills/
+tests/
+
+# Git
+.git/
+
+# Rust build artifacts — exclude everything except the cross-compiled Linux binary
+target/
+!target/x86_64-unknown-linux-gnu/release/unthinkclaw

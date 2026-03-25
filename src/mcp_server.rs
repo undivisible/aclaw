@@ -1,12 +1,15 @@
 //! MCP server mode — exposes unthinkclaw as an MCP server over stdio or HTTP.
 //! Other AI clients can connect to prompt unthinkclaw or use its tools.
 
-use axum::{extract::State, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::mpsc;
 
+use crate::agent::loop_runner::AgentRunner;
+use crate::channels::traits::{Channel, IncomingMessage, OutgoingMessage};
 use crate::tools::traits::{Tool, ToolSpec};
 
 #[derive(Debug, Deserialize)]
@@ -69,11 +72,37 @@ fn tool_to_mcp_schema(spec: &ToolSpec) -> Value {
     })
 }
 
+/// A no-op Channel used for HTTP chat requests — typing/send are handled by caller.
+struct HttpChannel;
+
+#[async_trait::async_trait]
+impl Channel for HttpChannel {
+    fn name(&self) -> &str { "http" }
+    async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
+        let (_tx, rx) = mpsc::channel(1);
+        Ok(rx)
+    }
+    async fn send(&self, _msg: OutgoingMessage) -> anyhow::Result<Option<String>> { Ok(None) }
+    async fn stop(&mut self) -> anyhow::Result<()> { Ok(()) }
+}
+
 #[derive(Clone)]
 struct McpState {
     tools: Arc<Vec<Arc<dyn Tool>>>,
     provider: Option<Arc<dyn crate::providers::traits::Provider>>,
     model: Option<String>,
+    runner: Option<Arc<AgentRunner>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpChatRequest {
+    text: String,
+    chat_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HttpChatResponse {
+    text: String,
 }
 
 /// Run unthinkclaw as an MCP server over stdio.
@@ -117,16 +146,19 @@ pub async fn run_mcp_server_http(
     tools: Vec<Arc<dyn Tool>>,
     provider: Option<Arc<dyn crate::providers::traits::Provider>>,
     model: Option<String>,
+    runner: Option<Arc<AgentRunner>>,
     port: u16,
 ) -> anyhow::Result<()> {
     let state = McpState {
         tools: Arc::new(tools),
         provider,
         model,
+        runner,
     };
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/chat", post(handle_http_chat))
         .route("/mcp", post(handle_http_mcp))
         .route("/", post(handle_http_mcp))
         .with_state(state);
@@ -139,6 +171,37 @@ pub async fn run_mcp_server_http(
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn handle_http_chat(
+    State(state): State<McpState>,
+    Json(req): Json<HttpChatRequest>,
+) -> (StatusCode, Json<HttpChatResponse>) {
+    let Some(runner) = state.runner else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HttpChatResponse { text: "Agent not initialized".to_string() }),
+        );
+    };
+
+    let msg = IncomingMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        sender_id: req.chat_id.clone(),
+        sender_name: None,
+        chat_id: req.chat_id,
+        text: req.text,
+        is_group: false,
+        reply_to: None,
+        timestamp: chrono::Utc::now(),
+    };
+
+    match runner.handle_message(&msg, &HttpChannel).await {
+        Ok(text) => (StatusCode::OK, Json(HttpChatResponse { text })),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(HttpChatResponse { text: format!("Error: {e}") }),
+        ),
+    }
 }
 
 async fn handle_http_mcp(
