@@ -49,6 +49,36 @@ pub trait Channel: Send + Sync {
         Ok(())
     }
 
+    /// Whether this channel supports live draft updates (send → update → finalize).
+    fn supports_draft_updates(&self) -> bool {
+        false
+    }
+
+    /// Send an initial draft placeholder (e.g. "⏳"). Returns message ID for edits.
+    async fn send_draft(&self, _chat_id: &str, _text: &str) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Edit the draft with a live progress update (tool start/end). Rate-limited by impl.
+    async fn update_draft_progress(
+        &self,
+        _chat_id: &str,
+        _message_id: &str,
+        _text: &str,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Finalize the draft with the full formatted response, replacing any progress text.
+    async fn finalize_draft(
+        &self,
+        _chat_id: &str,
+        _message_id: &str,
+        _text: &str,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Stop the channel gracefully.
     async fn stop(&mut self) -> anyhow::Result<()>;
 }

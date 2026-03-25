@@ -41,6 +41,8 @@ pub struct AgentRunner {
     /// Hot-reloadable system prompt — updated when MEMORY.md / context files change
     pub system_prompt: Arc<RwLock<String>>,
     model: std::sync::RwLock<String>,
+    /// The model as originally configured — used for reset-to-default
+    default_model: String,
     workspace: PathBuf,
     /// Hot-reloadable skills — re-discovered when skills/ dir changes
     pub skills: Arc<RwLock<Vec<skills::Skill>>>,
@@ -59,12 +61,14 @@ impl AgentRunner {
         system_prompt: impl Into<String>,
         model: impl Into<String>,
     ) -> Self {
+        let model_str = model.into();
         Self {
             provider,
             tools: Arc::new(RwLock::new(tools)),
             memory,
             system_prompt: Arc::new(RwLock::new(system_prompt.into())),
-            model: std::sync::RwLock::new(model.into()),
+            default_model: model_str.clone(),
+            model: std::sync::RwLock::new(model_str),
             workspace: PathBuf::from("."),
             skills: Arc::new(RwLock::new(Vec::new())),
             cost_tracker: Arc::new(CostTracker::new()),
@@ -108,9 +112,19 @@ impl AgentRunner {
         self.model.read().unwrap().clone()
     }
 
+    /// Get the originally configured model (before any runtime overrides)
+    pub fn get_default_model(&self) -> &str {
+        &self.default_model
+    }
+
     /// Switch model at runtime
     pub fn set_model(&self, model: impl Into<String>) {
         *self.model.write().unwrap() = model.into();
+    }
+
+    /// Reset model to originally configured default
+    pub fn reset_model(&self) {
+        *self.model.write().unwrap() = self.default_model.clone();
     }
 
     /// List available tools
@@ -224,8 +238,13 @@ impl AgentRunner {
         msg: &IncomingMessage,
         channel: &dyn Channel,
     ) -> anyhow::Result<String> {
-        // Signal thinking
-        let _ = channel.send_typing(&msg.chat_id).await;
+        // Send draft placeholder if channel supports live updates, otherwise typing indicator
+        let draft_id: Option<String> = if channel.supports_draft_updates() {
+            channel.send_draft(&msg.chat_id, "⏳").await.unwrap_or(None)
+        } else {
+            let _ = channel.send_typing(&msg.chat_id).await;
+            None
+        };
 
         // Build messages: system prompt + conversation history + new message
         let system_prompt = self.system_prompt.read().await.clone();
@@ -472,11 +491,19 @@ impl AgentRunner {
                         // Short execution — return directly
                         tracing::info!("Done after {} round(s) [{:?}]", round + 1, state);
                         self.persist_conversation(msg, &text).await?;
+                        if let Some(ref mid) = draft_id {
+                            let _ = channel.finalize_draft(&msg.chat_id, mid, &text).await;
+                            return Ok(String::new()); // channel sent it
+                        }
                         return Ok(text);
                     }
                     AgentState::Summarizing | AgentState::Direct | AgentState::Planning => {
                         tracing::info!("Done after {} round(s) [{:?}]", round + 1, state);
                         self.persist_conversation(msg, &text).await?;
+                        if let Some(ref mid) = draft_id {
+                            let _ = channel.finalize_draft(&msg.chat_id, mid, &text).await;
+                            return Ok(String::new()); // channel sent it
+                        }
                         return Ok(text);
                     }
                 }
@@ -516,7 +543,9 @@ impl AgentRunner {
             }
 
             // Progress callback
-            let _ = channel.send_typing(&msg.chat_id).await;
+            if !channel.supports_draft_updates() {
+                let _ = channel.send_typing(&msg.chat_id).await;
+            }
 
             // Build assistant tool_use message
             {
@@ -554,7 +583,25 @@ impl AgentRunner {
                     .join(", ")
             );
 
+            // Build accumulated progress text for draft updates
+            let mut progress_lines: Vec<String> = Vec::new();
+
             for tc in &response.tool_calls {
+                // ── Progress: tool start ──────────────────────────────
+                if let (true, Some(ref mid)) = (channel.supports_draft_updates(), &draft_id) {
+                    let hint = extract_tool_hint(&tc.name, &tc.arguments);
+                    let start_line = if hint.is_empty() {
+                        format!("⏳ {}\n", tc.name)
+                    } else {
+                        format!("⏳ {}: {}\n", tc.name, hint)
+                    };
+                    progress_lines.push(start_line.clone());
+                    let _ = channel
+                        .update_draft_progress(&msg.chat_id, mid, &progress_lines.join(""))
+                        .await;
+                }
+
+                let started = std::time::Instant::now();
                 let result = if let Some(tool) = tools_snapshot.iter().find(|t| t.name() == tc.name)
                 {
                     match tool.execute(&tc.arguments).await {
@@ -564,6 +611,27 @@ impl AgentRunner {
                 } else {
                     crate::tools::ToolResult::error(format!("Unknown tool: {}", tc.name))
                 };
+                let elapsed = started.elapsed().as_secs();
+
+                // ── Progress: tool completion ─────────────────────────
+                if let (true, Some(ref mid)) = (channel.supports_draft_updates(), &draft_id) {
+                    // Replace the ⏳ line for this tool with a ✅/❌ line
+                    let done_line = if result.is_error {
+                        format!("❌ {} ({}s)\n", tc.name, elapsed)
+                    } else {
+                        format!("✅ {} ({}s)\n", tc.name, elapsed)
+                    };
+                    // Replace last line that started with "⏳ {name}"
+                    let prefix = format!("⏳ {}", tc.name);
+                    if let Some(pos) = progress_lines.iter().rposition(|l| l.starts_with(&prefix)) {
+                        progress_lines[pos] = done_line;
+                    } else {
+                        progress_lines.push(done_line);
+                    }
+                    let _ = channel
+                        .update_draft_progress(&msg.chat_id, mid, &progress_lines.join(""))
+                        .await;
+                }
 
                 let truncated_output =
                     if result.output.len() > self.agent_config.max_tool_result_chars {
@@ -595,14 +663,20 @@ impl AgentRunner {
             &format!("Hit {} rounds.", self.agent_config.max_rounds),
         )
         .await?;
-        Ok(format!(
+        let circuit_msg = format!(
             "⚠️ Hit {} rounds ({} compactions). Break into smaller tasks?",
             self.agent_config.max_rounds, compactions_done
-        ))
+        );
+        if let Some(ref mid) = draft_id {
+            let _ = channel.finalize_draft(&msg.chat_id, mid, &circuit_msg).await;
+            return Ok(String::new());
+        }
+        Ok(circuit_msg)
     }
 
     /// Classify if a request needs tool calls (and thus planning) or is conversational
     async fn classify_request(&self, text: &str, _model: &str) -> bool {
+        // Note: extract_tool_hint is a module-level fn below
         // Heuristic: if message is short and conversational, skip planning
         let lower = text.to_lowercase();
         let word_count = text.split_whitespace().count();
@@ -779,4 +853,39 @@ impl AgentRunner {
 
         Ok(compacted)
     }
+}
+
+/// Extract a short hint from tool arguments for progress display.
+/// e.g. shell → first 60 chars of "command"; web_search → "query"; file_ops → "path"
+fn extract_tool_hint(name: &str, arguments: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+    let hint = match name {
+        "shell" | "bash" | "exec" => v
+            .get("command")
+            .or_else(|| v.get("cmd"))
+            .and_then(|s| s.as_str()),
+        "web_search" | "search" => v
+            .get("query")
+            .or_else(|| v.get("q"))
+            .and_then(|s| s.as_str()),
+        "web_fetch" | "fetch" => v.get("url").and_then(|s| s.as_str()),
+        "file_ops" | "read" | "write" | "edit" => v
+            .get("path")
+            .or_else(|| v.get("file_path"))
+            .and_then(|s| s.as_str()),
+        "vibemania" => v.get("goal").and_then(|s| s.as_str()),
+        _ => v
+            .as_object()
+            .and_then(|o| o.values().next())
+            .and_then(|v| v.as_str()),
+    };
+    hint.map(|s| {
+        let s = s.trim();
+        if s.len() > 60 {
+            format!("{}…", &s[..57])
+        } else {
+            s.to_string()
+        }
+    })
+    .unwrap_or_default()
 }
