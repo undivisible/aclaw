@@ -395,6 +395,9 @@ enum SwarmAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load .env if present — allows running without manually exporting env vars
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
     let tracing_cfg = config_path_for_cli(&cli)
         .and_then(|path| Config::load(&path).ok())

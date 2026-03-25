@@ -57,12 +57,18 @@ async function sendMessage(token, chatId, text) {
 // ── Anthropic helper ──────────────────────────────────────────────────────────
 
 async function callAnthropic(apiKey, userText) {
+	// OAuth tokens (sk-ant-oat*) use Bearer auth; direct keys use x-api-key
+	const isOAuth = apiKey.startsWith("sk-ant-oat");
+	const authHeaders = isOAuth
+		? { Authorization: `Bearer ${apiKey}` }
+		: { "x-api-key": apiKey };
+
 	const res = await fetch("https://api.anthropic.com/v1/messages", {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
-			"x-api-key": apiKey,
 			"anthropic-version": "2023-06-01",
+			...authHeaders,
 		},
 		body: JSON.stringify({
 			model: "claude-sonnet-4-6",

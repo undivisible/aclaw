@@ -81,6 +81,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Error handling
 anyhow = "1"
+dotenvy = "0.15"
 
 # Logging (lightweight)
 tracing = "0.1"
