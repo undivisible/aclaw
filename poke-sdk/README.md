@@ -54,7 +54,6 @@ bunx poke@latest mcp add http://localhost:3333/mcp --name unthinkclaw
 
 ## Available tools (via MCP)
 
-The MCP server exposes all unthinkclaw tools:
 - `shell` — execute shell commands
 - `file_ops` — read/write files
 - `web_search` — search the web
@@ -62,6 +61,15 @@ The MCP server exposes all unthinkclaw tools:
 - `edit` — surgical file edits
 - `ask` — prompt the unthinkclaw AI agent directly
 
+## Stdio mode (other MCP clients)
+
+`mcp-launcher.js` launches the binary in stdio MCP mode for clients that support
+it (not poke — poke requires a URL):
+
+```bash
+node poke-sdk/mcp-launcher.js
+```
+
 ## Configuration
 
-The server reads `unthinkclaw.json` by default. Pass `--config <path>` to use a different file.
+The server reads `unthinkclaw.json` by default. Pass `--config <path>` to override.
