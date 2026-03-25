@@ -23,9 +23,7 @@ export class UnthinkclawContainer extends Container {
 	}
 }
 
-// ── Telegram helpers ──────────────────────────────────────────────────────────
-
-const TG_MAX = 4000;
+// ── Telegram helpers ───────────────────────────────────────────────────────────
 
 async function tgCall(token, method, body) {
 	const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -36,32 +34,20 @@ async function tgCall(token, method, body) {
 	return res.json();
 }
 
-async function sendMessage(token, chatId, text) {
-	const chunks = [];
-	for (let i = 0; i < text.length; i += TG_MAX) {
-		chunks.push(text.slice(i, i + TG_MAX));
-	}
-	for (const chunk of chunks) {
-		const res = await tgCall(token, "sendMessage", {
-			chat_id: chatId,
-			text: chunk,
-			parse_mode: "Markdown",
-		});
-		// Fallback to plain text if Markdown parse fails
-		if (!res.ok) {
-			await tgCall(token, "sendMessage", { chat_id: chatId, text: chunk });
-		}
-	}
-}
-
 // ── Agent call via container ───────────────────────────────────────────────────
+// The container handles all Telegram messaging (⏳ draft, tool progress, final response).
+// We just fire-and-await; the container returns the final text (may be empty if already sent).
 
-async function callAgent(containerStub, chatId, text) {
+async function callAgent(containerStub, chatId, text, telegramToken) {
 	const res = await containerStub.fetch(
 		new Request("http://container/chat", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ text, chat_id: String(chatId) }),
+			body: JSON.stringify({
+				text,
+				chat_id: String(chatId),
+				telegram_token: telegramToken,
+			}),
 		})
 	);
 	if (!res.ok) {
@@ -69,7 +55,7 @@ async function callAgent(containerStub, chatId, text) {
 		throw new Error(`Agent error ${res.status}: ${body}`);
 	}
 	const data = await res.json();
-	return data.text ?? "(no response)";
+	return data.text ?? "";
 }
 
 // ── Bot logic ─────────────────────────────────────────────────────────────────
@@ -82,14 +68,28 @@ async function handleUpdate(env, update, containerStub) {
 	const text = msg.text;
 	if (!chatId || !text) return;
 
-	// Typing indicator — fire and forget
-	tgCall(env.TELEGRAM_BOT_TOKEN, "sendChatAction", {
-		chat_id: chatId,
-		action: "typing",
-	});
+	const token = env.TELEGRAM_BOT_TOKEN;
 
-	const reply = await callAgent(containerStub, chatId, text);
-	await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, reply);
+	// Send initial typing — container will send ⏳ on first tool call
+	tgCall(token, "sendChatAction", { chat_id: chatId, action: "typing" });
+
+	try {
+		// Container handles all Telegram messages (draft → progress → finalize).
+		// If text comes back non-empty, it means draft mode wasn't used (no tools called).
+		const reply = await callAgent(containerStub, chatId, text, token);
+		if (reply) {
+			// Direct/conversational response — container didn't send it, we do
+			await tgCall(token, "sendMessage", {
+				chat_id: chatId,
+				text: reply,
+			});
+		}
+	} catch (err) {
+		await tgCall(token, "sendMessage", {
+			chat_id: chatId,
+			text: `❌ ${err.message.slice(0, 300)}`,
+		});
+	}
 }
 
 // ── Worker entrypoint ─────────────────────────────────────────────────────────
@@ -102,14 +102,12 @@ export default {
 			return new Response("ok");
 		}
 
-		// Get container stub (shared for both webhook and MCP routes)
 		const id = env.UNTHINKCLAW.idFromName("default");
 		const stub = env.UNTHINKCLAW.get(id);
 
 		if (url.pathname === "/webhook" && request.method === "POST") {
 			const update = await request.json().catch(() => null);
 			if (update) {
-				// Process in background — return 200 to Telegram immediately
 				ctx.waitUntil(
 					handleUpdate(env, update, stub).catch((err) =>
 						console.error("bot error:", err.message)
@@ -119,7 +117,6 @@ export default {
 			return new Response("ok", { status: 200 });
 		}
 
-		// All other routes → container (MCP server)
 		return stub.fetch(request);
 	},
 };

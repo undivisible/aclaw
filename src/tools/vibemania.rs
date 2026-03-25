@@ -22,6 +22,10 @@ struct VibemaiaArgs {
     goal: String,
     #[serde(default)]
     parallel: usize,
+    /// Model for the orchestrator (planner). Defaults to configured heavy_model.
+    orchestrator_model: Option<String>,
+    /// Model for each runner (executor). Defaults to configured fast_model.
+    runner_model: Option<String>,
 }
 
 #[async_trait]
@@ -33,7 +37,7 @@ impl Tool for VibemaniaTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "vibemania".to_string(),
-            description: "Run Vibemania for autonomous code exploration, implementation, and codebase analysis. Supports parallel execution.".to_string(),
+            description: "Run Vibemania for autonomous code exploration, implementation, and codebase analysis. Supports parallel execution with configurable orchestrator/runner models for agent swarms.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -47,6 +51,14 @@ impl Tool for VibemaniaTool {
                         "minimum": 1,
                         "maximum": 8,
                         "default": 2
+                    },
+                    "orchestrator_model": {
+                        "type": "string",
+                        "description": "Model for the orchestrator/planner (e.g. 'claude-sonnet-4-6', 'claude-opus-4-6'). Defaults to heavy_model."
+                    },
+                    "runner_model": {
+                        "type": "string",
+                        "description": "Model for each parallel runner/executor (e.g. 'claude-haiku-4-5-20251001'). Defaults to fast_model."
                     }
                 },
                 "required": ["goal"]
@@ -75,14 +87,21 @@ impl Tool for VibemaniaTool {
         let vibemania_bin = vibemania_bin.expect("checked above");
 
         // Spawn vibemania directly instead of shelling out through bash.
-        let output = tokio::process::Command::new(vibemania_bin)
-            .current_dir(&self.workspace)
+        let mut cmd = tokio::process::Command::new(vibemania_bin);
+        cmd.current_dir(&self.workspace)
             .arg("run")
             .arg(&args.goal)
             .arg("--parallel")
-            .arg(parallel.to_string())
-            .output()
-            .await?;
+            .arg(parallel.to_string());
+
+        if let Some(ref omodel) = args.orchestrator_model {
+            cmd.arg("--orchestrator-model").arg(omodel);
+        }
+        if let Some(ref rmodel) = args.runner_model {
+            cmd.arg("--runner-model").arg(rmodel);
+        }
+
+        let output = cmd.output().await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);

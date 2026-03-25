@@ -215,6 +215,32 @@ impl Provider for AnthropicProvider {
         // Detect OAuth tokens (sk-ant-oat) vs API keys (sk-ant-api)
         let is_oauth = self.api_key.contains("sk-ant-oat");
 
+        // OAuth tokens require the system prompt to start with the Claude Code identity prefix
+        if is_oauth {
+            let prefix = serde_json::json!({
+                "type": "text",
+                "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+                "cache_control": {"type": "ephemeral"}
+            });
+            match body.get("system") {
+                Some(Value::Array(blocks)) => {
+                    let mut new_blocks = vec![prefix];
+                    new_blocks.extend(blocks.iter().cloned());
+                    body["system"] = Value::Array(new_blocks);
+                }
+                Some(Value::String(s)) => {
+                    body["system"] = serde_json::json!([
+                        prefix,
+                        {"type": "text", "text": s, "cache_control": {"type": "ephemeral"}}
+                    ]);
+                }
+                None => {
+                    body["system"] = serde_json::json!([prefix]);
+                }
+                _ => {}
+            }
+        }
+
         let mut req_builder = client
             .post(format!("{}/messages", self.base_url))
             .header("content-type", "application/json")
@@ -223,7 +249,8 @@ impl Provider for AnthropicProvider {
         if is_oauth {
             req_builder = req_builder
                 .header("Authorization", format!("Bearer {}", &self.api_key))
-                .header("anthropic-beta", "prompt-caching-2024-07-31,claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14");
+                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14")
+                .header("anthropic-dangerous-direct-browser-access", "true");
         } else {
             req_builder = req_builder
                 .header("x-api-key", &self.api_key)

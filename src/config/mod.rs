@@ -64,8 +64,8 @@ impl Default for AgentConfig {
             max_history_messages: 10,
             max_tool_result_chars: 20_000,
             max_context_chars: 150_000,
-            fast_model: "claude-haiku-4-5".to_string(),
-            heavy_model: "claude-opus-4".to_string(),
+            fast_model: "claude-haiku-4-5-20251001".to_string(),
+            heavy_model: "claude-sonnet-4-6".to_string(),
         }
     }
 }
@@ -167,7 +167,7 @@ impl Config {
             },
             embeddings: EmbeddingsConfig::default(),
             agent: AgentConfig::default(),
-            model: "claude-sonnet-4-5".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             system_prompt: "You are a helpful AI assistant.".to_string(),
             workspace: PathBuf::from("."),
             storage: StorageConfig::default(),

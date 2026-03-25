@@ -53,28 +53,40 @@ impl Tool for SessionStatusTool {
             serde_json::from_str(arguments).unwrap_or(SessionStatusArgs { model: None });
 
         if let Some(model) = &args.model {
-            if model == "default" {
-                self.runner.set_model("claude-sonnet-4-5");
-                return Ok(ToolResult::success(
-                    "Model reset to default: claude-sonnet-4-5",
-                ));
+            if model == "default" || model == "reset" {
+                let default = self.runner.get_default_model().to_string();
+                self.runner.reset_model();
+                return Ok(ToolResult::success(format!(
+                    "Model reset to configured default: {default}"
+                )));
             }
             self.runner.set_model(model.as_str());
-            return Ok(ToolResult::success(format!("Model switched to: {}", model)));
+            return Ok(ToolResult::success(format!("Model switched to: {model}")));
         }
 
         let tools = self.runner.list_tools().await;
+        let cfg = &self.runner.agent_config;
         let status = format!(
             "Session Status:\n\
-            Model: {}\n\
-            Tools: {} ({})\n\
+            Model (current):  {}\n\
+            Model (default):  {}\n\
+            Model (fast):     {}\n\
+            Model (heavy):    {}\n\
+            Tools: {} active\n\
             PID: {}\n\
-            Runtime: unthinkclaw v{}",
+            Runtime: unthinkclaw v{}\n\n\
+            Tool list: {}\n\n\
+            Tip: use session_status{{\"model\":\"...\"}}\n\
+            For swarms — use fast model as runner, heavy as orchestrator.\n\
+            Available aliases: default/reset (restore configured model)",
             self.runner.get_model(),
+            self.runner.get_default_model(),
+            cfg.fast_model,
+            cfg.heavy_model,
             tools.len(),
-            tools.join(", "),
             std::process::id(),
             env!("CARGO_PKG_VERSION"),
+            tools.join(", "),
         );
 
         Ok(ToolResult::success(status))
@@ -164,9 +176,9 @@ impl Tool for ListModelsTool {
                 // Fallback: return known models
                 Ok(ToolResult::success(
                     "Available models:\n\n\
-                    • claude-sonnet-4-5 (fast, smart — default)\n\
-                    • claude-opus-4 (most capable)\n\
-                    • claude-haiku-3-5 (fastest, cheapest)\n\n\
+                    • claude-sonnet-4-6 (balanced — default)\n\
+                    • claude-opus-4-6 (most capable)\n\
+                    • claude-haiku-4-5-20251001 (fastest, cheapest — use as swarm runner)\n\n\
                     Use session_status with model parameter to switch.",
                 ))
             }
