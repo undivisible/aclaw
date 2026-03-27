@@ -1,5 +1,6 @@
 import { Container } from "@cloudflare/containers";
 import { env } from "cloudflare:workers";
+import packageJson from "../package.json";
 
 export class UnthinkclawContainer extends Container {
 	defaultPort = 8080;
@@ -99,7 +100,12 @@ export default {
 		const url = new URL(request.url);
 
 		if (url.pathname === "/health") {
-			return new Response("ok");
+			return Response.json({
+				status: "ok",
+				version: packageJson.version || "unknown",
+				service: "unthinkclaw",
+				timestamp: new Date().toISOString(),
+			});
 		}
 
 		const id = env.UNTHINKCLAW.idFromName("default");

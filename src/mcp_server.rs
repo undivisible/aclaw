@@ -1,7 +1,13 @@
 //! MCP server mode — exposes unthinkclaw as an MCP server over stdio or HTTP.
 //! Other AI clients can connect to prompt unthinkclaw or use its tools.
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -77,13 +83,19 @@ struct HttpChannel;
 
 #[async_trait::async_trait]
 impl Channel for HttpChannel {
-    fn name(&self) -> &str { "http" }
+    fn name(&self) -> &str {
+        "http"
+    }
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (_tx, rx) = mpsc::channel(1);
         Ok(rx)
     }
-    async fn send(&self, _msg: OutgoingMessage) -> anyhow::Result<Option<String>> { Ok(None) }
-    async fn stop(&mut self) -> anyhow::Result<()> { Ok(()) }
+    async fn send(&self, _msg: OutgoingMessage) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Live-update channel that posts directly to Telegram during agent execution.
@@ -108,8 +120,13 @@ impl TelegramHttpChannel {
         format!("https://api.telegram.org/bot{}/{}", self.token, method)
     }
 
-    async fn tg_post(&self, method: &str, body: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        let resp = self.client
+    async fn tg_post(
+        &self,
+        method: &str,
+        body: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let resp = self
+            .client
             .post(self.api_url(method))
             .json(&body)
             .send()
@@ -120,7 +137,9 @@ impl TelegramHttpChannel {
 
 #[async_trait::async_trait]
 impl Channel for TelegramHttpChannel {
-    fn name(&self) -> &str { "telegram-http" }
+    fn name(&self) -> &str {
+        "telegram-http"
+    }
 
     async fn start(&mut self) -> anyhow::Result<mpsc::Receiver<IncomingMessage>> {
         let (_tx, rx) = mpsc::channel(1);
@@ -133,17 +152,28 @@ impl Channel for TelegramHttpChannel {
             "text": msg.text,
         });
         let resp = self.tg_post("sendMessage", body).await?;
-        Ok(resp["result"]["message_id"].as_i64().map(|id| id.to_string()))
+        Ok(resp["result"]["message_id"]
+            .as_i64()
+            .map(|id| id.to_string()))
     }
 
-    fn supports_draft_updates(&self) -> bool { true }
+    fn supports_draft_updates(&self) -> bool {
+        true
+    }
 
     async fn send_draft(&self, chat_id: &str, text: &str) -> anyhow::Result<Option<String>> {
-        let resp = self.tg_post("sendMessage", serde_json::json!({
-            "chat_id": chat_id,
-            "text": text,
-        })).await?;
-        Ok(resp["result"]["message_id"].as_i64().map(|id| id.to_string()))
+        let resp = self
+            .tg_post(
+                "sendMessage",
+                serde_json::json!({
+                    "chat_id": chat_id,
+                    "text": text,
+                }),
+            )
+            .await?;
+        Ok(resp["result"]["message_id"]
+            .as_i64()
+            .map(|id| id.to_string()))
     }
 
     async fn update_draft_progress(
@@ -164,11 +194,16 @@ impl Channel for TelegramHttpChannel {
         }
 
         let msg_id: i64 = message_id.parse().unwrap_or(0);
-        let _ = self.tg_post("editMessageText", serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": msg_id,
-            "text": text,
-        })).await;
+        let _ = self
+            .tg_post(
+                "editMessageText",
+                serde_json::json!({
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                    "text": text,
+                }),
+            )
+            .await;
         Ok(())
     }
 
@@ -182,24 +217,36 @@ impl Channel for TelegramHttpChannel {
         let html = md_to_telegram_html(text);
 
         // Try HTML first, fall back to plain
-        let r = self.tg_post("editMessageText", serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": msg_id,
-            "text": &html,
-            "parse_mode": "HTML",
-        })).await?;
+        let r = self
+            .tg_post(
+                "editMessageText",
+                serde_json::json!({
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                    "text": &html,
+                    "parse_mode": "HTML",
+                }),
+            )
+            .await?;
 
         if !r["ok"].as_bool().unwrap_or(false) {
-            let _ = self.tg_post("editMessageText", serde_json::json!({
-                "chat_id": chat_id,
-                "message_id": msg_id,
-                "text": strip_html(&html),
-            })).await;
+            let _ = self
+                .tg_post(
+                    "editMessageText",
+                    serde_json::json!({
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "text": strip_html(&html),
+                    }),
+                )
+                .await;
         }
         Ok(())
     }
 
-    async fn stop(&mut self) -> anyhow::Result<()> { Ok(()) }
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Convert GitHub Flavoured Markdown to Telegram HTML.
@@ -231,24 +278,40 @@ fn md_to_telegram_html(md: &str) -> String {
         }
         // Table row → flatten
         if line.starts_with('|') {
-            let cells: Vec<&str> = line.split('|').map(str::trim).filter(|s| !s.is_empty()).collect();
+            let cells: Vec<&str> = line
+                .split('|')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
             if !cells.is_empty() {
                 out.push(inline_to_html(&cells.join("  •  ")));
             }
             continue;
         }
         // Horizontal rule → blank
-        if line.chars().all(|c| c == '-' || c == '*' || c == '_' || c == ' ') && line.len() >= 3 {
+        if line
+            .chars()
+            .all(|c| c == '-' || c == '*' || c == '_' || c == ' ')
+            && line.len() >= 3
+        {
             out.push(String::new());
             continue;
         }
         // Heading
-        if let Some(rest) = line.strip_prefix("### ").or_else(|| line.strip_prefix("## ")).or_else(|| line.strip_prefix("# ")) {
+        if let Some(rest) = line
+            .strip_prefix("### ")
+            .or_else(|| line.strip_prefix("## "))
+            .or_else(|| line.strip_prefix("# "))
+        {
             out.push(format!("<b>{}</b>", inline_to_html(rest)));
             continue;
         }
         // Bullet
-        if let Some(rest) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).or_else(|| line.strip_prefix("• ")) {
+        if let Some(rest) = line
+            .strip_prefix("- ")
+            .or_else(|| line.strip_prefix("* "))
+            .or_else(|| line.strip_prefix("• "))
+        {
             out.push(format!("• {}", inline_to_html(rest)));
             continue;
         }
@@ -278,7 +341,9 @@ fn md_to_telegram_html(md: &str) -> String {
 }
 
 fn esc_html(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn inline_to_html(text: &str) -> String {
@@ -288,25 +353,28 @@ fn inline_to_html(text: &str) -> String {
     while i < bytes.len() {
         // Inline code
         if bytes[i] == b'`' {
-            if let Some(j) = text[i+1..].find('`') {
-                out.push_str(&format!("<code>{}</code>", esc_html(&text[i+1..i+1+j])));
+            if let Some(j) = text[i + 1..].find('`') {
+                out.push_str(&format!(
+                    "<code>{}</code>",
+                    esc_html(&text[i + 1..i + 1 + j])
+                ));
                 i = i + 1 + j + 1;
                 continue;
             }
         }
         // Bold **...**
-        if bytes.get(i) == Some(&b'*') && bytes.get(i+1) == Some(&b'*') {
-            if let Some(j) = text[i+2..].find("**") {
-                out.push_str(&format!("<b>{}</b>", esc_html(&text[i+2..i+2+j])));
+        if bytes.get(i) == Some(&b'*') && bytes.get(i + 1) == Some(&b'*') {
+            if let Some(j) = text[i + 2..].find("**") {
+                out.push_str(&format!("<b>{}</b>", esc_html(&text[i + 2..i + 2 + j])));
                 i = i + 2 + j + 2;
                 continue;
             }
         }
         // Link [text](url)
         if bytes[i] == b'[' {
-            if let Some(j) = text[i+1..].find("](") {
-                let link_text = &text[i+1..i+1+j];
-                let rest = &text[i+1+j+2..];
+            if let Some(j) = text[i + 1..].find("](") {
+                let link_text = &text[i + 1..i + 1 + j];
+                let rest = &text[i + 1 + j + 2..];
                 if let Some(k) = rest.find(')') {
                     let url = &rest[..k];
                     out.push_str(&format!("<a href=\"{}\">{}</a>", url, esc_html(link_text)));
@@ -395,6 +463,15 @@ pub async fn run_mcp_server(
 }
 
 /// Run unthinkclaw as an MCP server over HTTP (for Cloudflare Container deployment).
+async fn health_handler() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "service": "unthinkclaw",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
 pub async fn run_mcp_server_http(
     tools: Vec<Arc<dyn Tool>>,
     provider: Option<Arc<dyn crate::providers::traits::Provider>>,
@@ -410,7 +487,7 @@ pub async fn run_mcp_server_http(
     };
 
     let app = Router::new()
-        .route("/health", get(|| async { "ok" }))
+        .route("/health", get(health_handler))
         .route("/chat", post(handle_http_chat))
         .route("/mcp", post(handle_http_mcp))
         .route("/", post(handle_http_mcp))
@@ -433,7 +510,9 @@ async fn handle_http_chat(
     let Some(runner) = state.runner else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(HttpChatResponse { text: "Agent not initialized".to_string() }),
+            Json(HttpChatResponse {
+                text: "Agent not initialized".to_string(),
+            }),
         );
     };
 
@@ -460,7 +539,9 @@ async fn handle_http_chat(
         Ok(text) => (StatusCode::OK, Json(HttpChatResponse { text })),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(HttpChatResponse { text: format!("Error: {e}") }),
+            Json(HttpChatResponse {
+                text: format!("Error: {e}"),
+            }),
         ),
     }
 }
@@ -526,7 +607,10 @@ fn handle_tools_list(
     tools: &[Arc<dyn Tool>],
     has_provider: bool,
 ) -> JsonRpcResponse {
-    let mut mcp_tools: Vec<Value> = tools.iter().map(|t| tool_to_mcp_schema(&t.spec())).collect();
+    let mut mcp_tools: Vec<Value> = tools
+        .iter()
+        .map(|t| tool_to_mcp_schema(&t.spec()))
+        .collect();
 
     // Add "ask" tool if we have a provider (allows other AIs to prompt unthinkclaw)
     if has_provider {
