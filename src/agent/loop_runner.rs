@@ -153,6 +153,9 @@ impl AgentRunner {
 
             match self.handle_message(&msg, channel).await {
                 Ok(response) => {
+                    if response.trim().is_empty() {
+                        continue;
+                    }
                     channel
                         .send(OutgoingMessage {
                             chat_id: msg.chat_id.clone(),
@@ -205,6 +208,9 @@ impl AgentRunner {
                         tracing::debug!("Heartbeat: agent responded OK, skipping output");
                         continue;
                     }
+                    if response.trim().is_empty() {
+                        continue;
+                    }
                     channel
                         .send(OutgoingMessage {
                             chat_id: msg.chat_id.clone(),
@@ -246,9 +252,17 @@ impl AgentRunner {
             None
         };
 
+        if msg.is_group && !crate::context::should_respond(msg) {
+            tracing::debug!("Skipping ambient group message without assistant context: {}", msg.id);
+            return Ok(String::new());
+        }
+
         // Build messages: system prompt + conversation history + new message
         let system_prompt = self.system_prompt.read().await.clone();
         let mut messages = vec![ChatMessage::system(&system_prompt)];
+        if let Some(guidance) = crate::context::routing_guidance(msg.is_group, channel.name()) {
+            messages.push(ChatMessage::system(guidance));
+        }
 
         // Skill injection
         {

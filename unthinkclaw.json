@@ -12,6 +12,28 @@
   },
   "toolsets": {},
   "policy": {},
+  "plugin_layer": {
+    "enabled": true,
+    "manifest_path": "plugins/manifest.json",
+    "hook_events": [
+      "before_message",
+      "after_message",
+      "before_tool",
+      "after_tool"
+    ],
+    "allow_core_fallback": true,
+    "layered_overrides": [
+      "system_prompt",
+      "toolsets"
+    ]
+  },
+  "group_chat": {
+    "enable_ambient_questions": true,
+    "rolling_memory_namespace": "group_memory",
+    "rolling_memory_max_chars": 6000,
+    "rolling_memory_recent_turns": 16,
+    "ambient_question_window": 24
+  },
   "embeddings": {
     "enabled": false,
     "provider": "none",

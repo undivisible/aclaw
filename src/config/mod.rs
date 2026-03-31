@@ -19,6 +19,8 @@ pub struct Config {
     pub channel: ChannelConfig,
     pub gateway: GatewayConfig,
     pub policy: PolicyConfig,
+    pub plugin_layer: PluginLayerConfig,
+    pub group_chat: GroupChatConfig,
     pub toolsets: ToolsetConfig,
 }
 
@@ -144,6 +146,26 @@ pub struct PolicyConfig {
     pub allow_plugin_git: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginLayerConfig {
+    pub enabled: bool,
+    pub manifest_path: PathBuf,
+    pub hook_events: Vec<String>,
+    pub allow_core_fallback: bool,
+    pub layered_overrides: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GroupChatConfig {
+    pub enable_ambient_questions: bool,
+    pub rolling_memory_namespace: String,
+    pub rolling_memory_max_chars: usize,
+    pub rolling_memory_recent_turns: usize,
+    pub ambient_question_window: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ToolsetConfig {
@@ -186,6 +208,8 @@ impl Config {
             },
             gateway: GatewayConfig::default(),
             policy: PolicyConfig::default(),
+            plugin_layer: PluginLayerConfig::default(),
+            group_chat: GroupChatConfig::default(),
             toolsets: ToolsetConfig::default(),
         }
     }
@@ -305,6 +329,35 @@ impl Default for PolicyConfig {
             allow_dynamic_tools: true,
             allow_plugin_shell: false,
             allow_plugin_git: false,
+        }
+    }
+}
+
+impl Default for PluginLayerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            manifest_path: PathBuf::from("plugins/manifest.json"),
+            hook_events: vec![
+                "before_message".to_string(),
+                "after_message".to_string(),
+                "before_tool".to_string(),
+                "after_tool".to_string(),
+            ],
+            allow_core_fallback: true,
+            layered_overrides: vec!["system_prompt".to_string(), "toolsets".to_string()],
+        }
+    }
+}
+
+impl Default for GroupChatConfig {
+    fn default() -> Self {
+        Self {
+            enable_ambient_questions: true,
+            rolling_memory_namespace: "group_memory".to_string(),
+            rolling_memory_max_chars: 6_000,
+            rolling_memory_recent_turns: 16,
+            ambient_question_window: 24,
         }
     }
 }
