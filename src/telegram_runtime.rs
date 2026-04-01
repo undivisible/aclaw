@@ -70,6 +70,9 @@ pub async fn run_telegram_chat(
 
         match runner.handle_message(&msg, &tg).await {
             Ok(response) => {
+                if response.trim().is_empty() {
+                    continue;
+                }
                 let _ = tg.send_message(&response).await;
             }
             Err(error) => {
