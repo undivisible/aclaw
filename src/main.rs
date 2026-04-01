@@ -441,7 +441,8 @@ async fn main() -> anyhow::Result<()> {
                 Arc::clone(&policy),
                 memory.clone(),
                 embedding_provider,
-                &cfg.toolsets,
+                Arc::clone(&provider),
+                &cfg,
             );
 
             // Load any previously created dynamic tools
@@ -460,28 +461,44 @@ async fn main() -> anyhow::Result<()> {
                 .with_skills(discovered_skills.clone())
                 .await;
 
-            // Add claude_usage tool (needs cost tracker reference)
-            runner
+            let runner_arc = Arc::new(runner);
+
+            // Add tools that need runner reference
+            runner_arc
                 .add_tool(Arc::new(
-                    unthinkclaw::tools::claude_usage::ClaudeUsageTool::new(runner.cost_tracker()),
+                    unthinkclaw::tools::coding_swarm::CodingSwarmTool::new(runner_arc.clone(), 3),
+                ))
+                .await;
+            runner_arc
+                .add_tool(Arc::new(
+                    unthinkclaw::tools::tool_search::ToolSearchTool::new(runner_arc.tools.clone()),
+                ))
+                .await;
+            runner_arc
+                .add_tool(Arc::new(
+                    unthinkclaw::tools::mode_switch::ModeSwitchTool::new(runner_arc.mode_handle()),
                 ))
                 .await;
 
-            // Start cron scheduler background task
+            // Add claude_usage tool (needs cost tracker reference)
+            runner_arc
+                .add_tool(Arc::new(
+                    unthinkclaw::tools::claude_usage::ClaudeUsageTool::new(runner_arc.cost_tracker()),
+                ))
+                .await;
+
+            // Start cron scheduler background task and add tool
             if let Some(surreal_mem) = memory
                 .as_any()
                 .downcast_ref::<unthinkclaw::memory::surreal::SurrealMemory>()
             {
                 let cron_sched = Arc::new(CronScheduler::new(Arc::new(surreal_mem.clone())));
                 let (_cron_rx, _cron_shutdown) =
-                    unthinkclaw::cron_scheduler::start_cron_ticker(cron_sched);
-            } else {
-                // If it's not SurrealMemory, we can try to wrap it if we make CronScheduler generic,
-                // but since the user wants NO SQLITE, we assume memory is SurrealMemory.
-                // A better way is to check the actual type or provide a way to get the Surreal DB handle.
-
-                // For now, try a direct cast since we expect SurrealMemory only.
-                // We'll need a way to get Arc<SurrealMemory> from Arc<dyn MemoryBackend>.
+                    unthinkclaw::cron_scheduler::start_cron_ticker(cron_sched.clone());
+                
+                runner_arc.add_tool(Arc::new(
+                    unthinkclaw::tools::cron_tool::CronTool::new(cron_sched)
+                )).await;
             }
 
             let _self_update_handle = self_updater.start();
@@ -508,7 +525,7 @@ async fn main() -> anyhow::Result<()> {
                     let _heartbeat_handle = heartbeat::start_heartbeat(heartbeat_cfg, hb_tx);
 
                     let mut ch = CliChannel::new();
-                    runner.run_with_extra_rx(&mut ch, hb_rx).await?;
+                    runner_arc.run_with_extra_rx(&mut ch, hb_rx).await?;
                 }
                 #[cfg(feature = "channel-telegram")]
                 "telegram" => {
@@ -517,7 +534,7 @@ async fn main() -> anyhow::Result<()> {
                     let chat_id = telegram_chat_id
                         .ok_or_else(|| anyhow::anyhow!("--telegram-chat-id required"))?;
                     run_telegram_chat(
-                        runner,
+                        runner_arc,
                         memory,
                         token,
                         chat_id,
@@ -539,7 +556,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("   Listening for messages...");
 
                     let mut ch = DiscordChannel::new(token, channel_id);
-                    runner.run(&mut ch).await?;
+                    runner_arc.run(&mut ch).await?;
                 }
                 other => {
                     anyhow::bail!(
@@ -613,7 +630,8 @@ async fn main() -> anyhow::Result<()> {
                 Arc::clone(&policy),
                 Arc::clone(&memory),
                 embedding_provider,
-                &cfg.toolsets,
+                Arc::clone(&provider),
+                &cfg,
             );
 
             if let Some(port) = port {

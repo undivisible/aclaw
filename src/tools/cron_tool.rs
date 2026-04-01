@@ -6,14 +6,14 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use super::traits::*;
-use crate::scheduler::Scheduler;
+use crate::cron_scheduler::CronScheduler;
 
 pub struct CronTool {
-    scheduler: Arc<Scheduler>,
+    scheduler: Arc<CronScheduler>,
 }
 
 impl CronTool {
-    pub fn new(scheduler: Arc<Scheduler>) -> Self {
+    pub fn new(scheduler: Arc<CronScheduler>) -> Self {
         Self { scheduler }
     }
 }
@@ -95,7 +95,7 @@ impl Tool for CronTool {
                 if args.goal.is_empty() {
                     return Ok(ToolResult::error("goal is required"));
                 }
-                match self.scheduler.schedule(&args.cron, &args.goal, args.priority).await {
+                match self.scheduler.add("agent_task", &args.cron, &args.goal, "cli", "claude-sonnet-4-5").await {
                     Ok(id) => Ok(ToolResult::success(format!(
                         "Scheduled '{}' with id={} (cron: {})",
                         args.goal, id, args.cron
@@ -105,20 +105,21 @@ impl Tool for CronTool {
             }
 
             "list" => {
-                let schedules = self.scheduler.list().await;
-                if schedules.is_empty() {
+                let jobs = self.scheduler.list().await?;
+                if jobs.is_empty() {
                     return Ok(ToolResult::success("No schedules configured."));
                 }
-                let lines: Vec<String> = schedules
+                let lines: Vec<String> = jobs
                     .iter()
-                    .map(|s| {
+                    .map(|j| {
+                        let id = j.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
                         format!(
                             "- [{}] id={} cron='{}' goal='{}' enabled={}",
-                            if s.enabled { "✓" } else { "✗" },
-                            &s.id[..8],
-                            s.cron_expression,
-                            s.task_goal,
-                            s.enabled
+                            if j.enabled { "✓" } else { "✗" },
+                            &id,
+                            j.schedule,
+                            j.task,
+                            j.enabled
                         )
                     })
                     .collect();
@@ -130,7 +131,8 @@ impl Tool for CronTool {
                     return Ok(ToolResult::error("id is required"));
                 }
                 match self.scheduler.enable(&args.id).await {
-                    Ok(_) => Ok(ToolResult::success(format!("Enabled {}", args.id))),
+                    Ok(true) => Ok(ToolResult::success(format!("Enabled {}", args.id))),
+                    Ok(false) => Ok(ToolResult::error("Job not found".to_string())),
                     Err(e) => Ok(ToolResult::error(e.to_string())),
                 }
             }
@@ -140,7 +142,8 @@ impl Tool for CronTool {
                     return Ok(ToolResult::error("id is required"));
                 }
                 match self.scheduler.disable(&args.id).await {
-                    Ok(_) => Ok(ToolResult::success(format!("Disabled {}", args.id))),
+                    Ok(true) => Ok(ToolResult::success(format!("Disabled {}", args.id))),
+                    Ok(false) => Ok(ToolResult::error("Job not found".to_string())),
                     Err(e) => Ok(ToolResult::error(e.to_string())),
                 }
             }
@@ -149,8 +152,9 @@ impl Tool for CronTool {
                 if args.id.is_empty() {
                     return Ok(ToolResult::error("id is required"));
                 }
-                match self.scheduler.delete(&args.id).await {
-                    Ok(_) => Ok(ToolResult::success(format!("Deleted {}", args.id))),
+                match self.scheduler.remove(&args.id).await {
+                    Ok(true) => Ok(ToolResult::success(format!("Deleted {}", args.id))),
+                    Ok(false) => Ok(ToolResult::error("Job not found".to_string())),
                     Err(e) => Ok(ToolResult::error(e.to_string())),
                 }
             }

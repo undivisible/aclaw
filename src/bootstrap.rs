@@ -20,7 +20,10 @@ use crate::tools::file_ops::{FileReadTool, FileWriteTool};
 use crate::tools::shell::ShellTool;
 use crate::tools::skill_manager::SkillManagerTool;
 use crate::tools::toolsets::is_tool_enabled;
-use crate::tools::Tool;
+use crate::tools::{
+    BriefTool, ConfigTool, SleepTool, TodoWriteTool, ToolSearchTool, VibemaniaTool, WorktreeTool,
+    Tool,
+};
 
 pub fn load_config(path: &str) -> Config {
     let mut cfg = Config::load(path).unwrap_or_else(|_| {
@@ -162,8 +165,10 @@ pub fn build_base_tools(
     policy: Arc<ExecutionPolicy>,
     memory: Arc<dyn MemoryBackend>,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
-    toolsets: &ToolsetConfig,
+    provider: Arc<dyn Provider>,
+    cfg: &Config,
 ) -> Vec<Arc<dyn Tool>> {
+    let toolsets = &cfg.toolsets;
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ShellTool::new(workspace.to_path_buf(), Arc::clone(&policy))),
         Arc::new(FileReadTool::new(workspace.to_path_buf())),
@@ -183,6 +188,13 @@ pub fn build_base_tools(
         Arc::new(crate::tools::browser::BrowserTool::new()),
         Arc::new(crate::tools::mcp::McpTool::new()),
         Arc::new(SkillManagerTool::new(workspace.to_path_buf())),
+        Arc::new(BriefTool::new(Arc::clone(&provider), cfg.agent.fast_model.clone())),
+        Arc::new(ConfigTool::new(workspace.join("unthinkclaw.json"))),
+        Arc::new(SleepTool),
+        Arc::new(TodoWriteTool::new(workspace.to_path_buf())),
+        Arc::new(ToolSearchTool::new(Arc::new(tokio::sync::RwLock::new(vec![])))), // Placeholder, populated later
+        Arc::new(VibemaniaTool::new(workspace.to_path_buf())),
+        Arc::new(WorktreeTool::new(workspace.to_path_buf())),
     ];
     if let Some(provider) = embedding_provider {
         tools.push(Arc::new(EmbeddingStatusTool::new(Arc::clone(&provider))));

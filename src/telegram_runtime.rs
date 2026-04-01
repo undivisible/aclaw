@@ -13,20 +13,19 @@ use crate::memory::MemoryBackend;
 use crate::tools::message::MessageTool;
 
 pub async fn run_telegram_chat(
-    runner: AgentRunner,
+    runner: Arc<AgentRunner>,
     memory: Arc<dyn MemoryBackend>,
     token: String,
     chat_id: i64,
     model: String,
-    discovered_skills_len: usize,
+    skills_count: usize,
     workspace: PathBuf,
 ) -> anyhow::Result<()> {
+
     let tg = TelegramChannel::new(token.clone(), chat_id).with_memory(memory.clone());
     let tg_arc = Arc::new(tg.clone());
 
     runner.add_tool(Arc::new(MessageTool::new(tg_arc))).await;
-
-    let runner = Arc::new(runner);
 
     println!("unthinkclaw — {} via Telegram", model);
     println!("   Workspace: {}", workspace.display());
@@ -58,7 +57,7 @@ pub async fn run_telegram_chat(
         }
 
         if text.starts_with('/')
-            && handle_command(&runner, &memory, &tg, &msg, text, discovered_skills_len).await?
+            && handle_command(&runner, &memory, &tg, &msg, text, skills_count).await?
         {
             continue;
         }

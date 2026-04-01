@@ -522,16 +522,25 @@ impl AgentRunner {
                     {
                         execution_model = self.agent_config.heavy_model.clone();
                         tracing::info!("Planner chose OPUS for execution");
+                    } else if p_upper.contains("MODEL_CHOICE: SWARM")
+                        || p_upper.contains("MODEL_CHOICE:SWARM")
+                    {
+                        // Route to swarm — inject directive
+                        tracing::info!("Planner chose SWARM — routing to coding_swarm tool");
+                        messages.push(ChatMessage::system(
+                            "IMPORTANT: This task can be parallelized. Use the `coding_swarm` tool \
+                            to execute subtasks in parallel agents. \n\
+                            Decompose the original goal into a list of independent tasks for the swarm.".to_string()
+                        ));
                     } else if p_upper.contains("MODEL_CHOICE: VIBEMANIA")
                         || p_upper.contains("MODEL_CHOICE:VIBEMANIA")
                     {
                         // Route to vibemania — inject directive
-                        tracing::info!("Planner chose VIBEMANIA — routing to subspace");
+                        tracing::info!("Planner chose VIBEMANIA — routing to vibemania tool");
                         messages.push(ChatMessage::system(
-                            "IMPORTANT: This is a coding task. Use the `exec` tool to run vibemania/subspace \
-                            to handle this autonomously. Command: \
-                            `cd <project_dir> && subspace run \"<goal>\" --parallel 3`\n\
-                            Do NOT write code yourself — delegate to subspace.".to_string()
+                            "IMPORTANT: This is a complex coding task. Use the `vibemania` tool \
+                            to handle this autonomously. \n\
+                            Do NOT write code yourself — delegate to vibemania.".to_string()
                         ));
                     }
                     // else: stays as main_model (sonnet)
