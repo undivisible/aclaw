@@ -57,6 +57,8 @@ pub struct AgentConfig {
     pub fast_model: String,
     /// Heavy model for complex coding/reasoning
     pub heavy_model: String,
+    /// Per-tool allow/deny rules
+    pub permissions: PermissionRulesConfig,
 }
 
 impl Default for AgentConfig {
@@ -68,8 +70,23 @@ impl Default for AgentConfig {
             max_context_chars: 150_000,
             fast_model: "claude-haiku-4-5-20251001".to_string(),
             heavy_model: "claude-sonnet-4-6".to_string(),
+            permissions: PermissionRulesConfig::default(),
         }
     }
+}
+
+/// Per-tool permission rules.
+///
+/// `deny` blocks matching tools outright (checked first).
+/// `allow` restricts to only those tools when non-empty (allowlist mode).
+/// Supports exact tool names and glob-style `*` wildcards.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PermissionRulesConfig {
+    /// Tools that are always blocked (e.g. `["exec", "shell"]`).
+    pub deny: Vec<String>,
+    /// If non-empty, only these tools are allowed (allowlist mode).
+    pub allow: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

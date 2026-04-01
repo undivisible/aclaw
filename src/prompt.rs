@@ -5,6 +5,9 @@ use std::path::Path;
 
 const DEFAULT_PROMPT: &str = "You are a helpful AI assistant.";
 
+const ROUTING_GUIDANCE: &str = "## Routing guidance
+In group chats, respond to questions about the assistant, its plugins, settings, commands, upgrades, or transport even without a direct mention. Ignore unrelated ambient chatter unless the message clearly addresses the assistant or requests help.";
+
 /// Build the system prompt from workspace context files
 pub async fn build_system_prompt(workspace: &Path) -> String {
     let files = [
@@ -32,11 +35,14 @@ pub async fn build_system_prompt(workspace: &Path) -> String {
         }
     }
 
-    if parts.is_empty() {
+    let mut prompt = if parts.is_empty() {
         DEFAULT_PROMPT.to_string()
     } else {
         parts.join("\n\n---\n\n")
-    }
+    };
+    prompt.push_str("\n\n");
+    prompt.push_str(ROUTING_GUIDANCE);
+    prompt
 }
 
 /// Read a file from workspace, return None if missing
