@@ -10,6 +10,7 @@
 
 pub mod browser;
 pub mod claude_usage;
+pub mod computer_use;
 pub mod doctor;
 pub mod dynamic;
 pub mod edit;

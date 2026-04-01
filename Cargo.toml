@@ -56,6 +56,13 @@ docker = ["dep:bollard"]
 # Swarm mode (distributed agent coordination)
 swarm = []
 
+# Computer Use (OS automation)
+computer-use = []
+computer-use-linux = ["computer-use", "xcb", "ashpd"]
+computer-use-macos = ["computer-use", "accessibility", "core-foundation", "core-graphics"]
+computer-use-windows = ["computer-use", "windows"]
+computer-use-ocr = ["computer-use", "tesseract"]
+
 # Bundles
 all-channels = ["channel-cli", "channel-telegram", "channel-discord", "channel-slack", "channel-whatsapp", "channel-signal", "channel-matrix", "channel-irc", "channel-googlechat", "channel-msteams"]
 all-providers = ["provider-anthropic", "provider-openai", "provider-copilot", "provider-ollama", "provider-openrouter", "provider-groq", "provider-together", "provider-mistral", "provider-deepseek", "provider-fireworks", "provider-perplexity", "provider-xai", "provider-moonshot", "provider-venice", "provider-huggingface", "provider-siliconflow", "provider-cerebras", "provider-minimax", "provider-vercel", "provider-cloudflare"]
@@ -115,6 +122,22 @@ cron = "0.12"
 
 # Home directory resolution
 dirs = "5.0"
+
+# Computer Use — cross-platform OS automation
+enigo = { version = "0.2", features = ["serde"] }  # Input simulation
+image = "0.25"                                      # Image processing
+base64 = "0.22"                                     # Screenshot encoding
+
+# Platform-specific computer use (optional features)
+xcb = { version = "1.4", optional = true }                                    # Linux X11
+ashpd = { version = "0.9", optional = true }                                  # Linux Wayland portals
+accessibility = { version = "0.2", optional = true }                          # macOS Accessibility
+core-foundation = { version = "0.9", optional = true }                        # macOS Foundation
+core-graphics = { version = "0.23", optional = true }                         # macOS Graphics
+windows = { version = "0.58", optional = true, features = ["Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+
+# OCR (optional fallback)
+tesseract = { version = "0.15", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
