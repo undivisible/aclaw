@@ -10,6 +10,7 @@
 
 pub mod browser;
 pub mod claude_usage;
+pub mod coding_swarm;
 pub mod doctor;
 pub mod dynamic;
 pub mod edit;
@@ -28,4 +29,5 @@ pub mod vibemania;
 pub mod web_fetch;
 pub mod web_search;
 
+pub use coding_swarm::CodingSwarmTool;
 pub use traits::{Tool, ToolResult, ToolSpec};
