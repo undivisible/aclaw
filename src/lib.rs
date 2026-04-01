@@ -18,6 +18,7 @@ pub mod agent;
 pub mod bootstrap;
 pub mod channels;
 pub mod claw_adapter;
+pub mod context;
 pub mod config;
 pub mod cost;
 pub mod cron_scheduler;
@@ -41,7 +42,7 @@ pub mod telegram_runtime;
 pub mod text;
 pub mod tools;
 
-pub use agent::AgentRunner;
+pub use agent::{AgentMode, AgentRunner};
 pub use channels::Channel;
 pub use cost::CostTracker;
 pub use scheduler::Scheduler;

@@ -8,6 +8,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 
+use crate::agent::hooks::{run_post_hooks, run_pre_hooks, HookDecision, ToolHook};
+use crate::agent::mode::{is_approval, is_rejection, AgentMode, NullChannel, PendingPlan, PendingPlans};
 use crate::channels::{Channel, IncomingMessage, OutgoingMessage};
 use crate::cost::{CostTracker, TokenUsage};
 use crate::memory::MemoryBackend;
@@ -51,6 +53,12 @@ pub struct AgentRunner {
     pub steering_queue: Arc<std::sync::Mutex<Vec<String>>>,
     /// Agent limits and model preferences
     pub agent_config: crate::config::AgentConfig,
+    /// Execution mode (Auto / Coding / BypassPermissions / Swarm)
+    mode: Arc<std::sync::RwLock<AgentMode>>,
+    /// Pending plans awaiting user approval, keyed by chat_id
+    pending_plans: PendingPlans,
+    /// Registered tool hooks (PreToolUse / PostToolUse)
+    hooks: Arc<std::sync::RwLock<Vec<Arc<dyn ToolHook>>>>,
 }
 
 impl AgentRunner {
@@ -74,12 +82,40 @@ impl AgentRunner {
             cost_tracker: Arc::new(CostTracker::new()),
             steering_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_config: crate::config::AgentConfig::default(),
+            mode: Arc::new(std::sync::RwLock::new(AgentMode::default())),
+            pending_plans: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            hooks: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
     }
 
     pub fn with_config(mut self, config: crate::config::AgentConfig) -> Self {
         self.agent_config = config;
         self
+    }
+
+    pub fn with_mode(self, mode: AgentMode) -> Self {
+        *self.mode.write().unwrap() = mode;
+        self
+    }
+
+    /// Read the current execution mode.
+    pub fn get_mode(&self) -> AgentMode {
+        self.mode.read().unwrap().clone()
+    }
+
+    /// Set the execution mode at runtime (used by ModeSwitchTool).
+    pub fn set_mode(&self, mode: AgentMode) {
+        *self.mode.write().unwrap() = mode;
+    }
+
+    /// Arc handle to the mode lock — pass to ModeSwitchTool.
+    pub fn mode_handle(&self) -> Arc<std::sync::RwLock<AgentMode>> {
+        self.mode.clone()
+    }
+
+    /// Register a tool hook (PreToolUse / PostToolUse).
+    pub fn add_hook(&self, hook: Arc<dyn ToolHook>) {
+        self.hooks.write().unwrap().push(hook);
     }
 
     /// Queue a steering message to inject into the current agent loop
@@ -140,6 +176,60 @@ impl AgentRunner {
     /// Add a tool at runtime (for late-binding tools like session_status)
     pub async fn add_tool(&self, tool: Arc<dyn Tool>) {
         self.tools.write().await.push(tool);
+    }
+
+    /// Deploy parallel headless agent workers for a coding swarm.
+    ///
+    /// Each task runs in an isolated `AgentRunner` context (shared provider + tools,
+    /// separate conversation history). Workers execute `parallelism` at a time.
+    /// Returns `(task, result)` pairs in completion order.
+    pub async fn deploy_coding_swarm(
+        self: Arc<Self>,
+        tasks: Vec<String>,
+        base_chat_id: &str,
+        parallelism: usize,
+    ) -> Vec<(String, String)> {
+        let parallelism = parallelism.max(1);
+        let mut all_results = Vec::new();
+
+        for (chunk_idx, chunk) in tasks.chunks(parallelism).enumerate() {
+            let handles: Vec<_> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, task)| {
+                    let runner = self.clone();
+                    let chat_id = format!("{}_sw{}_{}", base_chat_id, chunk_idx, i);
+                    let task = task.clone();
+                    tokio::spawn(async move {
+                        let msg = IncomingMessage {
+                            id: format!("sw_{}_{}", chunk_idx, i),
+                            sender_id: "swarm".to_string(),
+                            sender_name: None,
+                            chat_id,
+                            text: task.clone(),
+                            is_group: false,
+                            reply_to: None,
+                            timestamp: chrono::Utc::now(),
+                        };
+                        let null_ch = NullChannel::new("swarm");
+                        let result = runner
+                            .handle_message(&msg, &null_ch)
+                            .await
+                            .unwrap_or_else(|e| format!("⚠️ Agent error: {}", e));
+                        (task, result)
+                    })
+                })
+                .collect();
+
+            for handle in handles {
+                match handle.await {
+                    Ok(result) => all_results.push(result),
+                    Err(e) => tracing::warn!("Swarm worker panicked: {}", e),
+                }
+            }
+        }
+
+        all_results
     }
 
     /// Run the agent loop on a channel.
@@ -257,6 +347,37 @@ impl AgentRunner {
             return Ok(String::new());
         }
 
+        // Check for a pending plan awaiting approval (coding mode with plan_approval).
+        // If found and approved: resume execution with the original task + stored plan.
+        // If rejected: cancel and return early.
+        let (effective_text, resume_plan, resume_model) = {
+            let mut plans = self.pending_plans.lock().unwrap();
+            if let Some(pending) = plans.get(&msg.chat_id) {
+                if pending.is_expired() {
+                    plans.remove(&msg.chat_id);
+                    (msg.text.clone(), None, None)
+                } else if is_approval(&msg.text) {
+                    let pending = plans.remove(&msg.chat_id).unwrap();
+                    tracing::info!("Plan approved for chat_id={}", msg.chat_id);
+                    (pending.original_message, Some(pending.plan), Some(pending.preferred_model))
+                } else if is_rejection(&msg.text) {
+                    plans.remove(&msg.chat_id);
+                    return Ok("Plan cancelled. What would you like to do instead?".to_string());
+                } else {
+                    // New unrelated message — discard the stale pending plan
+                    plans.remove(&msg.chat_id);
+                    (msg.text.clone(), None, None)
+                }
+            } else {
+                (msg.text.clone(), None, None)
+            }
+        };
+        let resuming_from_plan = resume_plan.is_some();
+
+        // Snapshot mode and hooks once for this message (avoids holding locks across awaits)
+        let mode = self.get_mode();
+        let hooks_snapshot: Vec<Arc<dyn ToolHook>> = self.hooks.read().unwrap().clone();
+
         // Build messages: system prompt + conversation history + new message
         let system_prompt = self.system_prompt.read().await.clone();
         let mut messages = vec![ChatMessage::system(&system_prompt)];
@@ -264,10 +385,15 @@ impl AgentRunner {
             messages.push(ChatMessage::system(guidance));
         }
 
+        // Mode-specific system prompt injection
+        if let Some(mode_prompt) = mode.system_prompt_injection() {
+            messages.push(ChatMessage::system(mode_prompt));
+        }
+
         // Skill injection
         {
             let skills = self.skills.read().await;
-            if let Some(skill) = skills::match_skill(&skills, &msg.text) {
+            if let Some(skill) = skills::match_skill(&skills, &effective_text) {
                 if let Some(content) = skills::load_skill_content(skill) {
                     messages.push(ChatMessage::system(format!(
                         "# Active Skill: {}\n{}\n\nFollow the instructions above for this skill.",
@@ -291,8 +417,8 @@ impl AgentRunner {
             }
         }
 
-        // Add new user message
-        messages.push(ChatMessage::user(&msg.text));
+        // Add new user message (use original task text when resuming from plan approval)
+        messages.push(ChatMessage::user(&effective_text));
 
         // Tool specs — snapshot at message start
         let tool_specs: Vec<crate::tools::ToolSpec> =
@@ -305,7 +431,11 @@ impl AgentRunner {
         // ═══════════════════════════════════════════════════════
 
         // Step 1: Decide if this needs planning or is a direct response
-        let needs_tools = self.classify_request(&msg.text, &main_model).await;
+        let needs_tools = if resuming_from_plan {
+            true // Always execute when resuming an approved plan
+        } else {
+            self.classify_request(&effective_text, &main_model).await
+        };
         let mut state = if needs_tools {
             AgentState::Planning
         } else {
@@ -317,25 +447,42 @@ impl AgentRunner {
         let mut _plan: Option<String> = None;
         let mut execution_model = main_model.clone(); // Default to configured model (sonnet)
 
-        if state == AgentState::Planning {
+        if let Some(ref plan) = resume_plan {
+            // Resuming from an approved plan — inject it and skip re-planning
+            messages.push(ChatMessage::system(format!(
+                "APPROVED EXECUTION PLAN (follow these steps):\n{}",
+                plan
+            )));
+            execution_model = resume_model.unwrap_or_else(|| main_model.clone());
+            state = AgentState::Executing;
+            tracing::info!("Resuming with approved plan, model={}", execution_model);
+        } else if state == AgentState::Planning {
+            let swarm_model_choice = if mode.is_swarm() {
+                "   - SWARM: for tasks that can be parallelized across multiple independent agents\n"
+            } else {
+                ""
+            };
             let plan_prompt = format!(
                 "You are a planning assistant. Analyze this request and output TWO things:\n\n\
                 1. MODEL_CHOICE: Pick ONE execution model:\n\
                    - SONNET: for general tasks, file ops, web, simple edits, queries\n\
                    - OPUS: for complex coding, architecture, multi-file refactors, debugging hard bugs\n\
-                   - VIBEMANIA: for building features, creating projects, coding tasks that need autonomous agents\n\n\
+                   - VIBEMANIA: for building features, creating projects, coding tasks that need autonomous agents\n\
+                {swarm_choice}\
                 2. PLAN: A brief numbered step-by-step plan.\n\
                    - If VIBEMANIA: the plan should be a single step: delegate to vibemania/subspace with the goal\n\
+                   - If SWARM: the plan should list each independent subtask for parallel agents\n\
                    - If SONNET/OPUS: list what tools to use and in what order\n\n\
                 Format your response EXACTLY like:\n\
                 MODEL_CHOICE: SONNET\n\
                 PLAN:\n\
                 1. step one\n\
                 2. step two\n\n\
-                Available tools: {}\n\n\
-                User request: {}",
-                tool_specs.iter().map(|t| format!("{} ({})", t.name, t.description.chars().take(50).collect::<String>())).collect::<Vec<_>>().join(", "),
-                &msg.text
+                Available tools: {tools}\n\n\
+                User request: {request}",
+                swarm_choice = swarm_model_choice,
+                tools = tool_specs.iter().map(|t| format!("{} ({})", t.name, t.description.chars().take(50).collect::<String>())).collect::<Vec<_>>().join(", "),
+                request = &effective_text
             );
 
             let plan_messages = [ChatMessage::user(&plan_prompt)];
@@ -389,20 +536,54 @@ impl AgentRunner {
                     }
                     // else: stays as main_model (sonnet)
 
+                    // Coding/swarm mode: upgrade to heavy model if planner defaulted to main
+                    if mode.prefer_heavy_model() && execution_model == main_model {
+                        execution_model = self.agent_config.heavy_model.clone();
+                        tracing::info!("Coding mode: upgraded to heavy model");
+                    }
+
                     // Inject plan
                     messages.push(ChatMessage::system(format!(
                         "EXECUTION PLAN (follow these steps):\n{}",
                         p
                     )));
-                    _plan = Some(p);
+                    _plan = Some(p.clone());
                     state = AgentState::Executing;
+
+                    // Coding mode with plan_approval: return the plan to the user and wait
+                    // for explicit confirmation before executing anything.
+                    if mode.plan_approval() {
+                        {
+                            let mut plans = self.pending_plans.lock().unwrap();
+                            // Prune stale entries while we have the lock
+                            plans.retain(|_, v| !v.is_expired());
+                            plans.insert(
+                                msg.chat_id.clone(),
+                                PendingPlan {
+                                    plan: p.clone(),
+                                    original_message: effective_text.clone(),
+                                    preferred_model: execution_model.clone(),
+                                    created_at: std::time::Instant::now(),
+                                },
+                            );
+                        }
+                        let plan_response = format!(
+                            "**Coding Plan**\n\n{}\n\n---\nReply **go** to execute or **cancel** to abort.",
+                            p
+                        );
+                        if let Some(ref mid) = draft_id {
+                            let _ = channel.finalize_draft(&msg.chat_id, mid, &plan_response).await;
+                            return Ok(String::new());
+                        }
+                        return Ok(plan_response);
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("Planning failed ({}), falling back to direct", e);
                     state = AgentState::Direct;
                 }
             }
-        }
+        } // end else if state == AgentState::Planning
 
         // Step 3: Execute (tool loop)
         let mut tool_call_history: Vec<String> = Vec::new();
@@ -431,7 +612,7 @@ impl AgentRunner {
                     round + 1,
                     context_chars
                 );
-                messages = self.compact_messages(messages, &msg.text).await?;
+                messages = self.compact_messages(messages, &effective_text).await?;
                 compactions_done += 1;
             }
 
@@ -616,15 +797,33 @@ impl AgentRunner {
                 }
 
                 let started = std::time::Instant::now();
-                let result = if let Some(tool) = tools_snapshot.iter().find(|t| t.name() == tc.name)
-                {
-                    match tool.execute(&tc.arguments).await {
-                        Ok(r) => r,
-                        Err(e) => crate::tools::ToolResult::error(format!("Tool error: {}", e)),
+
+                // Pre-tool hooks — a Block decision skips execution entirely
+                let result = match run_pre_hooks(&hooks_snapshot, &tc.name, &tc.arguments).await {
+                    HookDecision::Block(reason) => {
+                        tracing::info!("Hook blocked '{}': {}", tc.name, reason);
+                        crate::tools::ToolResult::error(format!("Blocked by policy: {}", reason))
                     }
-                } else {
-                    crate::tools::ToolResult::error(format!("Unknown tool: {}", tc.name))
+                    HookDecision::Allow => {
+                        if let Some(tool) = tools_snapshot.iter().find(|t| t.name() == tc.name) {
+                            match tool.execute(&tc.arguments).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    crate::tools::ToolResult::error(format!("Tool error: {}", e))
+                                }
+                            }
+                        } else {
+                            crate::tools::ToolResult::error(format!(
+                                "Unknown tool: {}",
+                                tc.name
+                            ))
+                        }
+                    }
                 };
+
+                // Post-tool hooks (logging, auditing, etc.)
+                run_post_hooks(&hooks_snapshot, &tc.name, &tc.arguments, &result).await;
+
                 let elapsed = started.elapsed().as_secs();
 
                 // ── Progress: tool completion ─────────────────────────
@@ -690,7 +889,11 @@ impl AgentRunner {
 
     /// Classify if a request needs tool calls (and thus planning) or is conversational
     async fn classify_request(&self, text: &str, _model: &str) -> bool {
-        // Note: extract_tool_hint is a module-level fn below
+        // BypassPermissions, Coding, and Swarm modes always plan
+        if self.get_mode().always_plan() {
+            return true;
+        }
+
         // Heuristic: if message is short and conversational, skip planning
         let lower = text.to_lowercase();
         let word_count = text.split_whitespace().count();
