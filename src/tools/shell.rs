@@ -79,6 +79,13 @@ impl Tool for ShellTool {
 
         let args: ShellArgs = serde_json::from_str(arguments)?;
 
+        // Guard: block catastrophic commands unconditionally
+        if let Some(reason) = check_catastrophic_command(&args.command) {
+            return Ok(ToolResult::error(format!(
+                "⛔ Blocked catastrophic command: {}", reason
+            )));
+        }
+
         // Guard: prevent self-restart/self-kill mid-conversation
         let cmd_lower = args.command.to_lowercase();
         let self_name = std::env::current_exe()
@@ -179,4 +186,28 @@ impl Tool for ShellTool {
             ))
         })
     }
+}
+
+/// Helper: block catastrophic commands like `rm -rf /` or `mkfs`.
+fn check_catastrophic_command(cmd: &str) -> Option<&'static str> {
+    let lower = cmd.to_lowercase();
+
+    // rm -rf / or similar
+    if (lower.contains("rm ") && lower.contains("-rf") && (lower.contains(" /") || lower.contains(" *")))
+        || (lower.contains("rm ") && lower.contains("-fr") && (lower.contains(" /") || lower.contains(" *")))
+    {
+        return Some("Destructive recursive delete on root or wildcard.");
+    }
+
+    // Disk formatting
+    if lower.contains("mkfs") || lower.contains("fdisk") || lower.contains("dd if=") {
+        return Some("Disk formatting or low-level block write.");
+    }
+
+    // Fork bomb
+    if lower.contains(":(){ :|:& };:") {
+        return Some("Fork bomb.");
+    }
+
+    None
 }
