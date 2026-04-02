@@ -42,6 +42,25 @@ Status key:
 - [ ] let the agent create and update managed skills automatically after useful
   task completions
 
+## GPUI Menubar App (crepuscularity)
+
+Goal: Create a native GPUI menubar app using crepuscularity templates.
+
+Requirements:
+- [ ] Add gpui dependency
+- [ ] Create menubar tray icon with status indicator
+- [ ] Create .crepus templates for:
+  - Agent status display (running/stopped/error)
+  - Quick configuration panel
+  - Recent conversations list
+  - Settings access
+- [ ] Wire up to unthinkclaw agent runtime via IPC/channels
+
+Considerations:
+- Integrate GPUI event loop with tokio async runtime
+- Menu bar apps on macOS require different window handling
+- Should work on both macOS and Linux (with different tray implementations)
+
 ## Possible Issues To Watch
 
 - [ ] Discord and WhatsApp still look thin compared with Telegram
