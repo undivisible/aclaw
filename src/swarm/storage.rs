@@ -24,6 +24,7 @@ pub trait SwarmStorage: Send + Sync {
     async fn list_all_agents(&self) -> Result<Vec<super::AgentInfo>>;
     async fn update_agent_heartbeat(&self, agent_id: &str) -> Result<()>;
     async fn update_agent_status(&self, agent_id: &str, status: &str) -> Result<()>;
+    async fn upsert_agent(&self, agent: &super::AgentInfo) -> Result<()>;
 
     // === Agent Links (delegation permissions) ===
     async fn create_agent_link(&self, link: &AgentLink) -> Result<()>;
@@ -314,6 +315,15 @@ impl SwarmStorage for SurrealBackend {
             .query("UPDATE agents SET status = $status WHERE agent_id = $agent_id")
             .bind(("agent_id", agent_id.to_string()))
             .bind(("status", status.to_string()))
+            .await?;
+        Ok(())
+    }
+
+    async fn upsert_agent(&self, agent: &super::AgentInfo) -> Result<()> {
+        let _: Option<super::AgentInfo> = self
+            .db
+            .upsert(("agents", &*agent.agent_id))
+            .content(agent.clone())
             .await?;
         Ok(())
     }

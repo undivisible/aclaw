@@ -15,16 +15,17 @@ pub struct SwarmCoordinator {
     pub delegation: DelegationManager,
     pub teams: TeamManager,
     pub handoffs: HandoffManager,
-    pub scheduler: ConcurrencyScheduler,
+    pub scheduler: Arc<ConcurrencyScheduler>,
 }
 
 impl SwarmCoordinator {
     pub fn new(storage: Arc<dyn SwarmStorage>) -> Self {
+        let scheduler = Arc::new(ConcurrencyScheduler::new());
         Self {
             delegation: DelegationManager::new(storage.clone()),
             teams: TeamManager::new(storage.clone()),
             handoffs: HandoffManager::new(storage.clone()),
-            scheduler: ConcurrencyScheduler::new(),
+            scheduler: scheduler.clone(),
             storage,
             message_queue: Arc::new(RwLock::new(Vec::new())),
         }
@@ -131,5 +132,86 @@ impl SwarmCoordinator {
     /// Get agent by name
     pub async fn get_agent_by_name(&self, name: &str) -> Result<Option<AgentInfo>> {
         self.storage.get_agent_by_name(name).await
+    }
+
+    /// Deploy parallel headless agent workers (unified from AgentRunner).
+    ///
+    /// Each task runs in an isolated context (shared provider + tools).
+    /// Uses the concurrency scheduler to manage slots in the Delegate lane.
+    pub async fn deploy_parallel_agents(
+        &self,
+        runner: Arc<crate::agent::AgentRunner>,
+        tasks: Vec<String>,
+        base_chat_id: &str,
+        parallelism: usize,
+    ) -> Vec<(String, String)> {
+        let parallelism = parallelism.max(1);
+        let mut all_results = Vec::new();
+
+        for (chunk_idx, chunk) in tasks.chunks(parallelism).enumerate() {
+            let handles: Vec<_> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, task)| {
+                    let coordinator = Arc::new(self.clone_for_worker());
+                    let runner = runner.clone();
+                    let chat_id = format!("{}_sw{}_{}", base_chat_id, chunk_idx, i);
+                    let task = task.clone();
+
+                    tokio::spawn(async move {
+                        // Acquire a slot in the Delegate lane
+                        let slot_id = match coordinator
+                            .scheduler
+                            .acquire_slot("swarm_worker", super::scheduler::Lane::Delegate, &task)
+                            .await
+                        {
+                            Some(id) => id,
+                            None => return (task, "⚠️ Swarm lane full, task deferred.".to_string()),
+                        };
+
+                        let msg = crate::channels::IncomingMessage {
+                            id: format!("sw_{}_{}", chunk_idx, i),
+                            sender_id: "swarm".to_string(),
+                            sender_name: None,
+                            chat_id,
+                            text: task.clone(),
+                            is_group: false,
+                            reply_to: None,
+                            timestamp: chrono::Utc::now(),
+                        };
+                        let null_ch = crate::agent::mode::NullChannel::new("swarm");
+                        
+                        let result = runner
+                            .handle_message(&msg, &null_ch)
+                            .await
+                            .unwrap_or_else(|e| format!("⚠️ Agent error: {}", e));
+
+                        coordinator.scheduler.release_slot(&slot_id).await;
+                        (task, result)
+                    })
+                })
+                .collect();
+
+            for handle in handles {
+                match handle.await {
+                    Ok(result) => all_results.push(result),
+                    Err(e) => tracing::warn!("Swarm worker panicked: {}", e),
+                }
+            }
+        }
+
+        all_results
+    }
+
+    /// Internal helper to clone for worker tasks (storage is Arc, others are new/shared)
+    fn clone_for_worker(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            message_queue: self.message_queue.clone(),
+            delegation: DelegationManager::new(self.storage.clone()),
+            teams: TeamManager::new(self.storage.clone()),
+            handoffs: HandoffManager::new(self.storage.clone()),
+            scheduler: self.scheduler.clone(), // Use shared Arc
+        }
     }
 }

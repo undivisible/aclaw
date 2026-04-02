@@ -456,10 +456,25 @@ async fn main() -> anyhow::Result<()> {
                 println!("   Loaded {} custom tool(s)", dynamic_count);
             }
 
-            let runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
+                // Start swarm coordinator if requested
+                #[cfg(feature = "swarm")]
+                let coordinator = {
+                    let storage: Arc<dyn unthinkclaw::swarm::SwarmStorage> =
+                        Arc::new(unthinkclaw::swarm::SurrealBackend::new(&workspace.join(".unthinkclaw/swarm.surreal")).await?);
+                    let coord = Arc::new(unthinkclaw::swarm::SwarmCoordinator::new(storage));
+                    coord.init().await?;
+                    Some(coord)
+                };
+
+            let mut runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
                 .with_workspace(workspace.clone())
                 .with_skills(discovered_skills.clone())
                 .await;
+
+            #[cfg(feature = "swarm")]
+            if let Some(coord) = coordinator {
+                runner = runner.with_swarm(coord);
+            }
 
             let runner_arc = Arc::new(runner);
 
@@ -1069,7 +1084,7 @@ async fn main() -> anyhow::Result<()> {
                 };
 
                 let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
-                let surreal_path = default_local_state_path(&workspace);
+                let surreal_path = workspace.join(".unthinkclaw/swarm.surreal");
 
                 // Ensure directory exists
                 if let Some(parent) = surreal_path.parent() {

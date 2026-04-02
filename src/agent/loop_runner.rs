@@ -55,6 +55,8 @@ pub struct AgentRunner {
     pub agent_config: crate::config::AgentConfig,
     /// Execution mode (Auto / Coding / BypassPermissions / Swarm)
     mode: Arc<std::sync::RwLock<AgentMode>>,
+    /// Multi-agent swarm coordinator (optional)
+    pub swarm: Arc<std::sync::RwLock<Option<Arc<crate::swarm::SwarmCoordinator>>>>,
     /// Pending plans awaiting user approval, keyed by chat_id
     pending_plans: PendingPlans,
     /// Registered tool hooks (PreToolUse / PostToolUse)
@@ -83,9 +85,15 @@ impl AgentRunner {
             steering_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_config: crate::config::AgentConfig::default(),
             mode: Arc::new(std::sync::RwLock::new(AgentMode::default())),
+            swarm: Arc::new(std::sync::RwLock::new(None)),
             pending_plans: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hooks: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
+    }
+
+    pub fn with_swarm(self, coordinator: Arc<crate::swarm::SwarmCoordinator>) -> Self {
+        *self.swarm.write().unwrap() = Some(coordinator);
+        self
     }
 
     pub fn with_config(mut self, config: crate::config::AgentConfig) -> Self {
@@ -180,15 +188,29 @@ impl AgentRunner {
 
     /// Deploy parallel headless agent workers for a coding swarm.
     ///
-    /// Each task runs in an isolated `AgentRunner` context (shared provider + tools,
-    /// separate conversation history). Workers execute `parallelism` at a time.
-    /// Returns `(task, result)` pairs in completion order.
+    /// If a SwarmCoordinator is available, delegates to it for lane-based scheduling.
+    /// Otherwise, falls back to direct parallel spawning.
     pub async fn deploy_coding_swarm(
         self: Arc<Self>,
         tasks: Vec<String>,
         base_chat_id: &str,
         parallelism: usize,
     ) -> Vec<(String, String)> {
+        // Try to use the unified swarm coordinator if registered
+        let swarm_opt = {
+            let s = self.swarm.read().unwrap();
+            s.clone()
+        };
+
+        if let Some(coordinator) = swarm_opt {
+            tracing::info!("Deploying swarm via SwarmCoordinator (lane-based)");
+            return coordinator
+                .deploy_parallel_agents(self, tasks, base_chat_id, parallelism)
+                .await;
+        }
+
+        // Fallback to simple parallel execution if no coordinator is set
+        tracing::info!("Deploying swarm via direct spawning (fallback)");
         let parallelism = parallelism.max(1);
         let mut all_results = Vec::new();
 
