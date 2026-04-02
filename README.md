@@ -34,6 +34,7 @@ As of March 18, 2026:
 
 ## What Already Works
 
+- Native computer-use automation is enabled by default for local OS interaction.
 - Anthropic-first provider flow, plus OpenAI-compatible and other provider hooks
 - Telegram, CLI, Discord, Slack, WhatsApp, Matrix, Signal, IRC, Google Chat, and
   MS Teams channel modules

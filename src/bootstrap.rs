@@ -184,6 +184,16 @@ pub fn build_base_tools(
         Arc::new(crate::tools::mcp::McpTool::new()),
         Arc::new(SkillManagerTool::new(workspace.to_path_buf())),
     ];
+
+    #[cfg(feature = "computer-use")]
+    {
+        match crate::tools::computer_use::ComputerUseTool::new(Some(
+            workspace.to_string_lossy().to_string(),
+        )) {
+            Ok(tool) => tools.push(Arc::new(tool)),
+            Err(err) => tracing::warn!(error = %err, "computer use tool unavailable"),
+        }
+    }
     if let Some(provider) = embedding_provider {
         tools.push(Arc::new(EmbeddingStatusTool::new(Arc::clone(&provider))));
         tools.push(Arc::new(EmbeddingStoreTool::new(

@@ -75,6 +75,8 @@ src/
 
 ## 4) Key Implementation Notes
 
+- The computer-use tool is enabled by default and is intended to be the native OS automation path for the agent.
+
 ### Memory
 - SurrealDB + RocksDB is the intended primary backend direction
 - Sticker cache: `sticker_id → description` (avoids re-analysis)
