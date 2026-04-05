@@ -59,6 +59,8 @@ pub struct AgentConfig {
     pub heavy_model: String,
     /// Per-tool allow/deny rules
     pub permissions: PermissionRulesConfig,
+    /// Initial safety profile: `full`, `auto`, `prompt`, or `tools_only` (drives default `AgentMode`).
+    pub permission_profile: String,
 }
 
 impl Default for AgentConfig {
@@ -71,6 +73,7 @@ impl Default for AgentConfig {
             fast_model: "claude-haiku-4-5-20251001".to_string(),
             heavy_model: "claude-sonnet-4-6".to_string(),
             permissions: PermissionRulesConfig::default(),
+            permission_profile: "auto".to_string(),
         }
     }
 }
@@ -188,6 +191,55 @@ pub struct GroupChatConfig {
 pub struct ToolsetConfig {
     pub enabled: Vec<String>,
     pub disabled: Vec<String>,
+}
+
+/// Apply a named onboarding permission profile to `cfg` (policy, toolsets, and `permission_profile`).
+pub fn apply_permission_profile(cfg: &mut Config, profile: &str) {
+    let p = profile.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    match p.as_str() {
+        "full" => {
+            cfg.agent.permission_profile = "full".to_string();
+            cfg.policy.allow_shell = true;
+            cfg.policy.allow_dynamic_tools = true;
+            cfg.toolsets = ToolsetConfig::default();
+            cfg.agent.permissions = PermissionRulesConfig::default();
+        }
+        "auto" => {
+            cfg.agent.permission_profile = "auto".to_string();
+            cfg.policy = PolicyConfig::default();
+            cfg.toolsets = ToolsetConfig::default();
+            cfg.agent.permissions = PermissionRulesConfig::default();
+        }
+        "prompt" => {
+            cfg.agent.permission_profile = "prompt".to_string();
+            cfg.policy = PolicyConfig::default();
+            cfg.toolsets = ToolsetConfig::default();
+            cfg.agent.permissions = PermissionRulesConfig::default();
+        }
+        "tools_only" | "tools" => {
+            cfg.agent.permission_profile = "tools_only".to_string();
+            cfg.policy.allow_shell = false;
+            cfg.policy.allow_dynamic_tools = false;
+            cfg.toolsets.enabled = vec![
+                "web".to_string(),
+                "memory".to_string(),
+                "sessions".to_string(),
+            ];
+            cfg.toolsets.disabled = vec![
+                "browser".to_string(),
+                "vibemania".to_string(),
+                "create_tool".to_string(),
+                "mcp".to_string(),
+            ];
+            cfg.agent.permissions = PermissionRulesConfig::default();
+        }
+        _ => {
+            cfg.agent.permission_profile = "auto".to_string();
+            cfg.policy = PolicyConfig::default();
+            cfg.toolsets = ToolsetConfig::default();
+            cfg.agent.permissions = PermissionRulesConfig::default();
+        }
+    }
 }
 
 impl Config {

@@ -9,7 +9,9 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 
 use crate::agent::hooks::{run_post_hooks, run_pre_hooks, HookDecision, ToolHook};
-use crate::agent::mode::{is_approval, is_rejection, AgentMode, NullChannel, PendingPlan, PendingPlans};
+use crate::agent::mode::{
+    is_approval, is_rejection, AgentMode, NullChannel, PendingPlan, PendingPlans,
+};
 use crate::channels::{Channel, IncomingMessage, OutgoingMessage};
 use crate::cost::{CostTracker, TokenUsage};
 use crate::memory::MemoryBackend;
@@ -56,6 +58,7 @@ pub struct AgentRunner {
     /// Execution mode (Auto / Coding / BypassPermissions / Swarm)
     mode: Arc<std::sync::RwLock<AgentMode>>,
     /// Multi-agent swarm coordinator (optional)
+    #[cfg(feature = "swarm")]
     pub swarm: Arc<std::sync::RwLock<Option<Arc<crate::swarm::SwarmCoordinator>>>>,
     /// Pending plans awaiting user approval, keyed by chat_id
     pending_plans: PendingPlans,
@@ -85,12 +88,14 @@ impl AgentRunner {
             steering_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_config: crate::config::AgentConfig::default(),
             mode: Arc::new(std::sync::RwLock::new(AgentMode::default())),
+            #[cfg(feature = "swarm")]
             swarm: Arc::new(std::sync::RwLock::new(None)),
             pending_plans: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hooks: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
     }
 
+    #[cfg(feature = "swarm")]
     pub fn with_swarm(self, coordinator: Arc<crate::swarm::SwarmCoordinator>) -> Self {
         *self.swarm.write().unwrap() = Some(coordinator);
         self
@@ -196,17 +201,19 @@ impl AgentRunner {
         base_chat_id: &str,
         parallelism: usize,
     ) -> Vec<(String, String)> {
-        // Try to use the unified swarm coordinator if registered
-        let swarm_opt = {
-            let s = self.swarm.read().unwrap();
-            s.clone()
-        };
+        #[cfg(feature = "swarm")]
+        {
+            let swarm_opt = {
+                let s = self.swarm.read().unwrap();
+                s.clone()
+            };
 
-        if let Some(coordinator) = swarm_opt {
-            tracing::info!("Deploying swarm via SwarmCoordinator (lane-based)");
-            return coordinator
-                .deploy_parallel_agents(self, tasks, base_chat_id, parallelism)
-                .await;
+            if let Some(coordinator) = swarm_opt {
+                tracing::info!("Deploying swarm via SwarmCoordinator (lane-based)");
+                return coordinator
+                    .deploy_parallel_agents(self, tasks, base_chat_id, parallelism)
+                    .await;
+            }
         }
 
         // Fallback to simple parallel execution if no coordinator is set
@@ -365,7 +372,10 @@ impl AgentRunner {
         };
 
         if msg.is_group && !crate::context::should_respond(msg) {
-            tracing::debug!("Skipping ambient group message without assistant context: {}", msg.id);
+            tracing::debug!(
+                "Skipping ambient group message without assistant context: {}",
+                msg.id
+            );
             return Ok(String::new());
         }
 
@@ -381,7 +391,11 @@ impl AgentRunner {
                 } else if is_approval(&msg.text) {
                     let pending = plans.remove(&msg.chat_id).unwrap();
                     tracing::info!("Plan approved for chat_id={}", msg.chat_id);
-                    (pending.original_message, Some(pending.plan), Some(pending.preferred_model))
+                    (
+                        pending.original_message,
+                        Some(pending.plan),
+                        Some(pending.preferred_model),
+                    )
                 } else if is_rejection(&msg.text) {
                     plans.remove(&msg.chat_id);
                     return Ok("Plan cancelled. What would you like to do instead?".to_string());
@@ -562,7 +576,8 @@ impl AgentRunner {
                         messages.push(ChatMessage::system(
                             "IMPORTANT: This is a complex coding task. Use the `vibemania` tool \
                             to handle this autonomously. \n\
-                            Do NOT write code yourself — delegate to vibemania.".to_string()
+                            Do NOT write code yourself — delegate to vibemania."
+                                .to_string(),
                         ));
                     }
                     // else: stays as main_model (sonnet)
@@ -603,7 +618,9 @@ impl AgentRunner {
                             p
                         );
                         if let Some(ref mid) = draft_id {
-                            let _ = channel.finalize_draft(&msg.chat_id, mid, &plan_response).await;
+                            let _ = channel
+                                .finalize_draft(&msg.chat_id, mid, &plan_response)
+                                .await;
                             return Ok(String::new());
                         }
                         return Ok(plan_response);
@@ -844,10 +861,7 @@ impl AgentRunner {
                                 }
                             }
                         } else {
-                            crate::tools::ToolResult::error(format!(
-                                "Unknown tool: {}",
-                                tc.name
-                            ))
+                            crate::tools::ToolResult::error(format!("Unknown tool: {}", tc.name))
                         }
                     }
                 };
@@ -912,7 +926,9 @@ impl AgentRunner {
             self.agent_config.max_rounds, compactions_done
         );
         if let Some(ref mid) = draft_id {
-            let _ = channel.finalize_draft(&msg.chat_id, mid, &circuit_msg).await;
+            let _ = channel
+                .finalize_draft(&msg.chat_id, mid, &circuit_msg)
+                .await;
             return Ok(String::new());
         }
         Ok(circuit_msg)

@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            suffix: macos-aarch64
+          - os: macos-13
+            suffix: macos-x86_64
+          - os: ubuntu-22.04
+            suffix: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config libssl-dev clang
+
+      - name: Cargo build (default)
+        run: cargo build --release --locked
+
+      - name: Package default tarball
+        run: |
+          strip target/release/unthinkclaw 2>/dev/null || true
+          cd target/release
+          tar czvf "../../unthinkclaw-${{ matrix.suffix }}.tar.gz" unthinkclaw
+          cd ../..
+
+      - name: Cargo build (v2 minimal)
+        run: |
+          CARGO_TARGET_DIR=target-minimal cargo build --release --locked \
+            --no-default-features \
+            --features "core,channel-cli,provider-ollama"
+
+      - name: Package minimal tarball
+        run: |
+          strip target-minimal/release/unthinkclaw 2>/dev/null || true
+          cd target-minimal/release
+          tar czvf "../../../unthinkclaw-minimal-${{ matrix.suffix }}.tar.gz" unthinkclaw
+          cd ../..
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.suffix }}
+          path: "unthinkclaw*.tar.gz"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-assets
+          find artifacts -name '*.tar.gz' -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

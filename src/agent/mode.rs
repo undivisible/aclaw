@@ -48,9 +48,20 @@ pub enum AgentMode {
     ///
     /// The planner decomposes the task, then spawns up to `parallelism`
     /// concurrent AgentRunner workers. Results are merged into a summary.
-    Swarm {
-        parallelism: usize,
-    },
+    Swarm { parallelism: usize },
+}
+
+/// Maps stored `agent.permission_profile` to the initial runtime mode.
+pub fn agent_mode_from_permission_profile(profile: &str) -> AgentMode {
+    let p = profile.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    match p.as_str() {
+        "full" => AgentMode::BypassPermissions,
+        "prompt" => AgentMode::Coding {
+            plan_approval: true,
+            project_path: None,
+        },
+        _ => AgentMode::Auto,
+    }
 }
 
 impl AgentMode {
@@ -74,7 +85,13 @@ impl AgentMode {
         if self.bypass_permissions() {
             return false;
         }
-        matches!(self, Self::Coding { plan_approval: true, .. })
+        matches!(
+            self,
+            Self::Coding {
+                plan_approval: true,
+                ..
+            }
+        )
     }
 
     pub fn swarm_parallelism(&self) -> usize {

@@ -8,5 +8,5 @@ pub mod mode;
 pub mod streaming;
 
 pub use loop_runner::AgentRunner;
-pub use mode::{AgentMode, NullChannel, PendingPlan};
+pub use mode::{agent_mode_from_permission_profile, AgentMode, NullChannel, PendingPlan};
 pub use streaming::{stream_channel, StreamChunk, StreamReceiver, StreamSender};

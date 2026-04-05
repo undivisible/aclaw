@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-use unthinkclaw::agent::AgentRunner;
+use unthinkclaw::agent::hooks::PermissionHook;
+use unthinkclaw::agent::{agent_mode_from_permission_profile, AgentRunner};
 use unthinkclaw::bootstrap::{
     build_base_tools, build_embedding_provider, build_memory_backend, build_provider, load_config,
 };
@@ -14,7 +15,7 @@ use unthinkclaw::bootstrap::{
 use unthinkclaw::channels::cli::CliChannel;
 #[cfg(feature = "channel-discord")]
 use unthinkclaw::channels::discord::DiscordChannel;
-use unthinkclaw::config::Config;
+use unthinkclaw::config::{apply_permission_profile, Config};
 use unthinkclaw::cron_scheduler::CronScheduler;
 use unthinkclaw::diagnostics::{collect_doctor_report, render_doctor_report, render_findings};
 use unthinkclaw::heartbeat::{self, HeartbeatConfig};
@@ -147,9 +148,9 @@ enum Commands {
 
     /// Initialize configuration (interactive wizard or one-command setup)
     Init {
-        /// Provider name (anthropic, openai, openrouter, ollama)
-        #[arg(short, long, default_value = "anthropic")]
-        provider: String,
+        /// Provider (omit to pick from compiled-in list with type-to-filter)
+        #[arg(short, long)]
+        provider: Option<String>,
 
         /// API key
         #[arg(short = 'k', long)]
@@ -186,6 +187,10 @@ enum Commands {
         /// Workspace directory
         #[arg(short, long)]
         workspace: Option<PathBuf>,
+
+        /// Permission profile: full | auto | prompt | tools_only
+        #[arg(long)]
+        permission_profile: Option<String>,
     },
 
     /// Send a message to the running unthinkclaw bot via Telegram
@@ -456,20 +461,30 @@ async fn main() -> anyhow::Result<()> {
                 println!("   Loaded {} custom tool(s)", dynamic_count);
             }
 
-                // Start swarm coordinator if requested
-                #[cfg(feature = "swarm")]
-                let coordinator = {
-                    let storage: Arc<dyn unthinkclaw::swarm::SwarmStorage> =
-                        Arc::new(unthinkclaw::swarm::SurrealBackend::new(&workspace.join(".unthinkclaw/swarm.surreal")).await?);
-                    let coord = Arc::new(unthinkclaw::swarm::SwarmCoordinator::new(storage));
-                    coord.init().await?;
-                    Some(coord)
-                };
+            // Start swarm coordinator if requested
+            #[cfg(feature = "swarm")]
+            let coordinator = {
+                let storage: Arc<dyn unthinkclaw::swarm::SwarmStorage> = Arc::new(
+                    unthinkclaw::swarm::SurrealBackend::new(
+                        &workspace.join(".unthinkclaw/swarm.surreal"),
+                    )
+                    .await?,
+                );
+                let coord = Arc::new(unthinkclaw::swarm::SwarmCoordinator::new(storage));
+                coord.init().await?;
+                Some(coord)
+            };
 
-            let mut runner = AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
-                .with_workspace(workspace.clone())
-                .with_skills(discovered_skills.clone())
-                .await;
+            #[cfg_attr(not(feature = "swarm"), allow(unused_mut))]
+            let mut runner =
+                AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
+                    .with_config(cfg.agent.clone())
+                    .with_mode(agent_mode_from_permission_profile(
+                        &cfg.agent.permission_profile,
+                    ))
+                    .with_workspace(workspace.clone())
+                    .with_skills(discovered_skills.clone())
+                    .await;
 
             #[cfg(feature = "swarm")]
             if let Some(coord) = coordinator {
@@ -477,6 +492,10 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let runner_arc = Arc::new(runner);
+            runner_arc.add_hook(Arc::new(PermissionHook::new(
+                cfg.agent.permissions.deny.clone(),
+                cfg.agent.permissions.allow.clone(),
+            )));
 
             // Add tools that need runner reference
             runner_arc
@@ -498,7 +517,9 @@ async fn main() -> anyhow::Result<()> {
             // Add claude_usage tool (needs cost tracker reference)
             runner_arc
                 .add_tool(Arc::new(
-                    unthinkclaw::tools::claude_usage::ClaudeUsageTool::new(runner_arc.cost_tracker()),
+                    unthinkclaw::tools::claude_usage::ClaudeUsageTool::new(
+                        runner_arc.cost_tracker(),
+                    ),
                 ))
                 .await;
 
@@ -510,10 +531,12 @@ async fn main() -> anyhow::Result<()> {
                 let cron_sched = Arc::new(CronScheduler::new(Arc::new(surreal_mem.clone())));
                 let (_cron_rx, _cron_shutdown) =
                     unthinkclaw::cron_scheduler::start_cron_ticker(cron_sched.clone());
-                
-                runner_arc.add_tool(Arc::new(
-                    unthinkclaw::tools::cron_tool::CronTool::new(cron_sched)
-                )).await;
+
+                runner_arc
+                    .add_tool(Arc::new(unthinkclaw::tools::cron_tool::CronTool::new(
+                        cron_sched,
+                    )))
+                    .await;
             }
 
             let _self_update_handle = self_updater.start();
@@ -622,7 +645,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => {
             println!("unthinkclaw v{}", env!("CARGO_PKG_VERSION"));
             println!("Status: OK");
-            println!("Commands: chat, ask, doctor, audit, status, mcp, self-update, init, cron, swarm");
+            println!(
+                "Commands: chat, ask, doctor, audit, status, mcp, self-update, init, cron, swarm"
+            );
         }
 
         Commands::Mcp {
@@ -651,13 +676,23 @@ async fn main() -> anyhow::Result<()> {
 
             if let Some(port) = port {
                 let system_prompt = cfg.system_prompt.clone();
-                let runner = Arc::new(unthinkclaw::agent::loop_runner::AgentRunner::new(
-                    Arc::clone(&provider),
-                    tools.clone(),
-                    Arc::clone(&memory),
-                    system_prompt,
-                    model.clone(),
-                ));
+                let runner = Arc::new(
+                    unthinkclaw::agent::loop_runner::AgentRunner::new(
+                        Arc::clone(&provider),
+                        tools.clone(),
+                        Arc::clone(&memory),
+                        system_prompt,
+                        model.clone(),
+                    )
+                    .with_config(cfg.agent.clone())
+                    .with_mode(agent_mode_from_permission_profile(
+                        &cfg.agent.permission_profile,
+                    )),
+                );
+                runner.add_hook(Arc::new(PermissionHook::new(
+                    cfg.agent.permissions.deny.clone(),
+                    cfg.agent.permissions.allow.clone(),
+                )));
                 eprintln!(
                     "unthinkclaw v{} — MCP HTTP server on port {} ({})",
                     env!("CARGO_PKG_VERSION"),
@@ -678,8 +713,7 @@ async fn main() -> anyhow::Result<()> {
                     env!("CARGO_PKG_VERSION"),
                     model
                 );
-                unthinkclaw::mcp_server::run_mcp_server(tools, Some(provider), Some(model))
-                    .await?;
+                unthinkclaw::mcp_server::run_mcp_server(tools, Some(provider), Some(model)).await?;
             }
         }
 
@@ -715,22 +749,32 @@ async fn main() -> anyhow::Result<()> {
             model,
             start,
             workspace,
+            permission_profile,
         } => {
             let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
             println!("🐾 unthinkclaw setup\n");
 
             // === Resolve values (flags or interactive prompts) ===
+            let provider = match provider {
+                Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+                Some(_) | None => prompt_provider_interactive()?,
+            };
+
             let api_key = match api_key {
                 Some(k) => k,
                 None => {
-                    eprint!("  API key ({}): ", provider);
-                    let mut buf = String::new();
-                    std::io::stdin().read_line(&mut buf)?;
-                    let k = buf.trim().to_string();
-                    if k.is_empty() {
-                        anyhow::bail!("API key required");
+                    if provider == "ollama" {
+                        String::new()
+                    } else {
+                        eprint!("  API key ({}): ", provider);
+                        let mut buf = String::new();
+                        std::io::stdin().read_line(&mut buf)?;
+                        let k = buf.trim().to_string();
+                        if k.is_empty() {
+                            anyhow::bail!("API key required (omit only for ollama)");
+                        }
+                        k
                     }
-                    k
                 }
             };
 
@@ -801,6 +845,15 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
+            if channel == "telegram" && tg_token.is_none() {
+                anyhow::bail!("Telegram channel requires a bot token (use --telegram-token or enter it when prompted)");
+            }
+
+            let permission_profile = match permission_profile {
+                Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+                Some(_) | None => prompt_permission_profile_interactive()?,
+            };
+
             // === Validate ===
             let client = reqwest::Client::new();
             match provider.as_str() {
@@ -814,7 +867,7 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => println!("❌ {}", e),
                     }
                 }
-                _ => {
+                "anthropic" | "claude" => {
                     print!("\n  Validating API key... ");
                     let is_oauth = api_key.contains("sk-ant-oat");
                     let auth_resp = if is_oauth {
@@ -838,6 +891,26 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => println!("❌ {}", e),
                     }
                 }
+                "openai" => {
+                    print!("\n  Validating API key... ");
+                    let auth_resp = client
+                        .get("https://api.openai.com/v1/models")
+                        .bearer_auth(&api_key)
+                        .send()
+                        .await;
+                    match auth_resp {
+                        Ok(r) if r.status().is_success() => println!("✅"),
+                        Ok(r) => println!("⚠️  HTTP {} (may still work)", r.status()),
+                        Err(e) => println!("❌ {}", e),
+                    }
+                }
+                _ if !api_key.is_empty() => {
+                    println!(
+                        "\n  Skipping remote key validation for provider '{}'.",
+                        provider
+                    );
+                }
+                _ => {}
             }
 
             if let Some(ref token) = tg_token {
@@ -865,8 +938,10 @@ async fn main() -> anyhow::Result<()> {
             let mut env_content = String::new();
             if provider == "ollama" {
                 env_content.push_str("OLLAMA_BASE_URL=\"http://localhost:11434\"\n");
-            } else {
+            } else if provider == "anthropic" || provider == "claude" {
                 env_content.push_str(&format!("ANTHROPIC_API_KEY=\"{}\"\n", api_key));
+            } else {
+                env_content.push_str(&format!("OPENAI_API_KEY=\"{}\"\n", api_key));
             }
             if let Some(ref t) = tg_token {
                 env_content.push_str(&format!("UNTHINKCLAW_TELEGRAM_TOKEN=\"{}\"\n", t));
@@ -896,6 +971,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             cfg.model = model.clone();
+            apply_permission_profile(&mut cfg, &permission_profile);
             let json = serde_json::to_string_pretty(&cfg)?;
             let config_path = workspace.join("unthinkclaw.json");
             std::fs::write(&config_path, &json)?;
@@ -946,6 +1022,11 @@ async fn main() -> anyhow::Result<()> {
             println!("  Provider:  {}", cfg.provider.name);
             println!("  Model:     {}", model);
             println!("  Channel:   {}", channel);
+            println!(
+                "  Safety:    {} (see agent.permission_profile in {})",
+                cfg.agent.permission_profile,
+                config_path.display()
+            );
             println!("  Config:    {}", config_path.display());
             println!("  Secrets:   {}", env_path.display());
             println!("  Service:   ~/.config/systemd/user/unthinkclaw.service");
@@ -1351,6 +1432,100 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn compiled_in_providers() -> Vec<&'static str> {
+    let mut names = vec![
+        "cerebras",
+        "cloudflare",
+        "deepseek",
+        "fireworks",
+        "groq",
+        "huggingface",
+        "minimax",
+        "mistral",
+        "moonshot",
+        "openai",
+        "openrouter",
+        "perplexity",
+        "siliconflow",
+        "together",
+        "venice",
+        "vercel",
+        "xai",
+    ];
+    #[cfg(feature = "provider-anthropic")]
+    names.push("anthropic");
+    #[cfg(feature = "provider-copilot")]
+    names.push("copilot");
+    #[cfg(feature = "provider-ollama")]
+    names.push("ollama");
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn prompt_provider_interactive() -> anyhow::Result<String> {
+    let all = compiled_in_providers();
+    println!("  Choose a provider (type to filter the list, then pick a number or exact name):");
+    let mut filter = String::new();
+    loop {
+        let needle = filter.trim().to_lowercase();
+        let matches: Vec<&str> = if needle.is_empty() {
+            all.clone()
+        } else {
+            all.iter()
+                .copied()
+                .filter(|n| n.to_lowercase().contains(&needle))
+                .collect()
+        };
+        if matches.is_empty() {
+            println!("  (no matches — try another filter)");
+        } else {
+            println!("\n  Matching providers:");
+            for (i, n) in matches.iter().enumerate() {
+                println!("    [{}] {}", i + 1, n);
+            }
+        }
+        eprint!("  Filter, #, or exact name (empty = pick if exactly one match): ");
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        let t = line.trim();
+        if t.is_empty() {
+            if matches.len() == 1 {
+                return Ok(matches[0].to_string());
+            }
+            continue;
+        }
+        if let Ok(idx) = t.parse::<usize>() {
+            if (1..=matches.len()).contains(&idx) {
+                return Ok(matches[idx - 1].to_string());
+            }
+        }
+        if let Some(found) = matches.iter().find(|n| n.eq_ignore_ascii_case(t)) {
+            return Ok((*found).to_string());
+        }
+        if let Some(found) = all.iter().find(|n| n.eq_ignore_ascii_case(t)) {
+            return Ok((*found).to_string());
+        }
+        filter = t.to_string();
+    }
+}
+
+fn prompt_permission_profile_interactive() -> anyhow::Result<String> {
+    println!("\n  Permission profile:");
+    println!("    full        — autonomous mode (no plan approval; shell and dynamic tools on)");
+    println!("    auto        — default heuristics with shell enabled");
+    println!("    prompt      — approve plans before executing tools (not per-tool prompts)");
+    println!("    tools_only  — web + memory + session tools only (no shell or file writes)");
+    eprint!("  Choose [full / auto / prompt / tools_only] [auto]: ");
+    let mut buf = String::new();
+    std::io::stdin().read_line(&mut buf)?;
+    let s = buf.trim();
+    if s.is_empty() {
+        return Ok("auto".to_string());
+    }
+    Ok(s.to_string())
 }
 
 fn config_path_for_cli(cli: &Cli) -> Option<String> {

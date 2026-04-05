@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::config::{Config, ToolsetConfig};
+use crate::config::Config;
 use crate::memory::embeddings::{create_embedding_provider, EmbeddingProvider};
 use crate::memory::search::{MemoryGetTool, MemorySearchTool, SessionSearchTool};
 use crate::memory::surreal::SurrealMemory;
@@ -21,8 +21,8 @@ use crate::tools::shell::ShellTool;
 use crate::tools::skill_manager::SkillManagerTool;
 use crate::tools::toolsets::is_tool_enabled;
 use crate::tools::{
-    BriefTool, ConfigTool, SleepTool, TodoWriteTool, ToolSearchTool, VibemaniaTool, WorktreeTool,
-    Tool,
+    BriefTool, ConfigTool, SleepTool, TodoWriteTool, Tool, ToolSearchTool, VibemaniaTool,
+    WorktreeTool,
 };
 
 pub fn load_config(path: &str) -> Config {
@@ -188,11 +188,16 @@ pub fn build_base_tools(
         Arc::new(crate::tools::browser::BrowserTool::new()),
         Arc::new(crate::tools::mcp::McpTool::new()),
         Arc::new(SkillManagerTool::new(workspace.to_path_buf())),
-        Arc::new(BriefTool::new(Arc::clone(&provider), cfg.agent.fast_model.clone())),
+        Arc::new(BriefTool::new(
+            Arc::clone(&provider),
+            cfg.agent.fast_model.clone(),
+        )),
         Arc::new(ConfigTool::new(workspace.join("unthinkclaw.json"))),
         Arc::new(SleepTool),
         Arc::new(TodoWriteTool::new(workspace.to_path_buf())),
-        Arc::new(ToolSearchTool::new(Arc::new(tokio::sync::RwLock::new(vec![])))), // Placeholder, populated later
+        Arc::new(ToolSearchTool::new(Arc::new(tokio::sync::RwLock::new(
+            vec![],
+        )))), // Placeholder, populated later
         Arc::new(VibemaniaTool::new(workspace.to_path_buf())),
         Arc::new(WorktreeTool::new(workspace.to_path_buf())),
     ];
