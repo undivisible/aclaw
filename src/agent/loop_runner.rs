@@ -58,7 +58,7 @@ pub struct AgentRunner {
     /// Execution mode (Auto / Coding / BypassPermissions / Swarm)
     mode: Arc<std::sync::RwLock<AgentMode>>,
     /// Multi-agent swarm coordinator (optional)
-    #[cfg(feature = "swarm")]
+    #[cfg(feature = "plugin-swarm")]
     pub swarm: Arc<std::sync::RwLock<Option<Arc<crate::swarm::SwarmCoordinator>>>>,
     /// Pending plans awaiting user approval, keyed by chat_id
     pending_plans: PendingPlans,
@@ -88,14 +88,14 @@ impl AgentRunner {
             steering_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_config: crate::config::AgentConfig::default(),
             mode: Arc::new(std::sync::RwLock::new(AgentMode::default())),
-            #[cfg(feature = "swarm")]
+            #[cfg(feature = "plugin-swarm")]
             swarm: Arc::new(std::sync::RwLock::new(None)),
             pending_plans: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hooks: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
     }
 
-    #[cfg(feature = "swarm")]
+    #[cfg(feature = "plugin-swarm")]
     pub fn with_swarm(self, coordinator: Arc<crate::swarm::SwarmCoordinator>) -> Self {
         *self.swarm.write().unwrap() = Some(coordinator);
         self
@@ -201,7 +201,7 @@ impl AgentRunner {
         base_chat_id: &str,
         parallelism: usize,
     ) -> Vec<(String, String)> {
-        #[cfg(feature = "swarm")]
+        #[cfg(feature = "plugin-swarm")]
         {
             let swarm_opt = {
                 let s = self.swarm.read().unwrap();

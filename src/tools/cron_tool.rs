@@ -30,6 +30,7 @@ struct CronArgs {
     goal: String,
     /// Priority 1-10 (default 5)
     #[serde(default = "default_priority")]
+    #[allow(dead_code)]
     priority: u8,
     /// Schedule ID (required for enable/disable/delete)
     #[serde(default)]
@@ -95,7 +96,17 @@ impl Tool for CronTool {
                 if args.goal.is_empty() {
                     return Ok(ToolResult::error("goal is required"));
                 }
-                match self.scheduler.add("agent_task", &args.cron, &args.goal, "cli", "claude-sonnet-4-5").await {
+                match self
+                    .scheduler
+                    .add(
+                        "agent_task",
+                        &args.cron,
+                        &args.goal,
+                        "cli",
+                        "claude-sonnet-4-5",
+                    )
+                    .await
+                {
                     Ok(id) => Ok(ToolResult::success(format!(
                         "Scheduled '{}' with id={} (cron: {})",
                         args.goal, id, args.cron
@@ -167,14 +178,18 @@ impl Tool for CronTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::surreal::SurrealMemory;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn schedule_and_list() {
-        let scheduler = Arc::new(Scheduler::new());
+        let dir = tempdir().unwrap();
+        let mem = Arc::new(SurrealMemory::new(dir.path()).await.unwrap());
+        let scheduler = Arc::new(CronScheduler::new(mem));
         let tool = CronTool::new(scheduler);
 
         let r = tool
-            .execute(r#"{"action":"schedule","cron":"0 9 * * *","goal":"daily standup"}"#)
+            .execute(r#"{"action":"schedule","cron":"0 0 9 * * *","goal":"daily standup"}"#)
             .await
             .unwrap();
         assert!(!r.is_error, "{}", r.output);
@@ -185,7 +200,9 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_cron_fails() {
-        let scheduler = Arc::new(Scheduler::new());
+        let dir = tempdir().unwrap();
+        let mem = Arc::new(SurrealMemory::new(dir.path()).await.unwrap());
+        let scheduler = Arc::new(CronScheduler::new(mem));
         let tool = CronTool::new(scheduler);
         let r = tool
             .execute(r#"{"action":"schedule","cron":"not-valid","goal":"test"}"#)

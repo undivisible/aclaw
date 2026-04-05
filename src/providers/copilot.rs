@@ -1,12 +1,14 @@
 //! GitHub Copilot provider — token exchange + OpenAI-compatible API
 //! Reverse-engineered from OpenClaw's github-copilot-token module
+#![allow(dead_code)]
+// `ensure_token` / `github_token` are used by the GitHub-token exchange path; `chat` currently
+// requires a pre-resolved `api_token` (e.g. from OpenClaw cache).
 
 use async_trait::async_trait;
 use serde_json::Value;
 
 use super::traits::*;
 use crate::text::truncate_chars;
-use crate::tools::ToolSpec;
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 const DEFAULT_COPILOT_API_BASE: &str = "https://api.individual.githubcopilot.com";

@@ -31,27 +31,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake pkg-config libssl-dev clang
 
-      - name: Cargo build (default)
+      - name: Cargo build (v2 minimal — default features)
         run: cargo build --release --locked
-
-      - name: Package default tarball
-        run: |
-          strip target/release/unthinkclaw 2>/dev/null || true
-          cd target/release
-          tar czvf "../../unthinkclaw-${{ matrix.suffix }}.tar.gz" unthinkclaw
-          cd ../..
-
-      - name: Cargo build (v2 minimal)
-        run: |
-          CARGO_TARGET_DIR=target-minimal cargo build --release --locked \
-            --no-default-features \
-            --features "core,channel-cli,provider-ollama"
 
       - name: Package minimal tarball
         run: |
-          strip target-minimal/release/unthinkclaw 2>/dev/null || true
-          cd target-minimal/release
-          tar czvf "../../../unthinkclaw-minimal-${{ matrix.suffix }}.tar.gz" unthinkclaw
+          strip target/release/unthinkclaw 2>/dev/null || true
+          strip target/release/unthinkclaw-install 2>/dev/null || true
+          cd target/release
+          tar czvf "../../unthinkclaw-minimal-${{ matrix.suffix }}.tar.gz" unthinkclaw unthinkclaw-install
+          cd ../..
+
+      - name: Cargo build (full — all channels, providers, plugins)
+        run: |
+          CARGO_TARGET_DIR=target-full cargo build --release --locked --features full
+
+      - name: Package full tarball
+        run: |
+          strip target-full/release/unthinkclaw 2>/dev/null || true
+          strip target-full/release/unthinkclaw-install 2>/dev/null || true
+          cd target-full/release
+          tar czvf "../../../unthinkclaw-full-${{ matrix.suffix }}.tar.gz" unthinkclaw unthinkclaw-install
           cd ../..
 
       - uses: actions/upload-artifact@v4

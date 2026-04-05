@@ -174,6 +174,9 @@ pub struct PluginLayerConfig {
     pub hook_events: Vec<String>,
     pub allow_core_fallback: bool,
     pub layered_overrides: Vec<String>,
+    /// When `plugin-poke` is enabled, spawn `poke-sdk/start.js` as a managed MCP HTTP helper.
+    pub poke_tunnel: bool,
+    pub poke_mcp_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,13 +255,13 @@ impl Config {
     pub fn default_config() -> Self {
         Self {
             provider: ProviderConfig {
-                name: "anthropic".to_string(),
+                name: "ollama".to_string(),
                 api_key: None,
                 base_url: None,
             },
             embeddings: EmbeddingsConfig::default(),
             agent: AgentConfig::default(),
-            model: "claude-sonnet-4-6".to_string(),
+            model: "llama3.2".to_string(),
             system_prompt: "You are a helpful AI assistant.".to_string(),
             workspace: PathBuf::from("."),
             storage: StorageConfig::default(),
@@ -293,7 +296,7 @@ impl Default for Config {
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
-            name: "anthropic".to_string(),
+            name: "ollama".to_string(),
             api_key: None,
             base_url: None,
         }
@@ -415,6 +418,8 @@ impl Default for PluginLayerConfig {
             ],
             allow_core_fallback: true,
             layered_overrides: vec!["system_prompt".to_string(), "toolsets".to_string()],
+            poke_tunnel: false,
+            poke_mcp_port: 3333,
         }
     }
 }

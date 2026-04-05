@@ -62,7 +62,7 @@ proc.on("spawn", () => {
     console.log("─".repeat(60));
     console.log("MCP server ready. Register with poke:");
     console.log();
-    console.log(`  bunx poke@latest mcp add http://localhost:${PORT}/mcp --name unthinkclaw`);
+    console.log(`  bunx poke@latest mcp add http://127.0.0.1:${PORT}/mcp --name unthinkclaw`);
     console.log();
     console.log("─".repeat(60));
   }, 800);

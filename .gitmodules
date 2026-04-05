@@ -1,0 +1,3 @@
+[submodule "vendor/equilibrium"]
+	path = vendor/equilibrium
+	url = https://github.com/semitechnological/equilibrium

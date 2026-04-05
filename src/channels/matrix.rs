@@ -104,7 +104,7 @@ impl Channel for MatrixChannel {
         Ok(rx)
     }
 
-    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<()> {
+    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<Option<String>> {
         let client = reqwest::Client::new();
         let txn_id = uuid::Uuid::new_v4().to_string();
 
@@ -123,7 +123,7 @@ impl Channel for MatrixChannel {
             .send()
             .await?;
 
-        Ok(())
+        Ok(Some(txn_id))
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {

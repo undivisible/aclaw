@@ -101,40 +101,40 @@ impl AgentInfo {
     }
 }
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "plugin-swarm")]
 use crate::swarm::storage::SwarmStorage;
 use std::sync::Arc;
 
 pub struct AgentRegistry {
-    #[cfg(feature = "swarm")]
+    #[cfg(feature = "plugin-swarm")]
     storage: Arc<dyn SwarmStorage>,
 }
 
 impl AgentRegistry {
-    #[cfg(feature = "swarm")]
+    #[cfg(feature = "plugin-swarm")]
     pub fn new(storage: Arc<dyn SwarmStorage>) -> Self {
         Self { storage }
     }
 
     pub async fn register(&self, agent: AgentInfo) -> anyhow::Result<String> {
-        #[cfg(feature = "swarm")]
+        #[cfg(feature = "plugin-swarm")]
         {
             self.storage.upsert_agent(&agent).await?;
             Ok(agent.agent_id)
         }
-        #[cfg(not(feature = "swarm"))]
+        #[cfg(not(feature = "plugin-swarm"))]
         {
             let _ = agent;
-            anyhow::bail!("Swarm storage requires 'swarm' feature")
+            anyhow::bail!("Swarm storage requires 'plugin-swarm' feature")
         }
     }
 
     pub async fn get_agent(&self, id: &str) -> anyhow::Result<Option<AgentInfo>> {
-        #[cfg(feature = "swarm")]
+        #[cfg(feature = "plugin-swarm")]
         {
             self.storage.get_agent(id).await
         }
-        #[cfg(not(feature = "swarm"))]
+        #[cfg(not(feature = "plugin-swarm"))]
         {
             let _ = id;
             Ok(None)
@@ -142,7 +142,7 @@ impl AgentRegistry {
     }
 
     pub async fn find_by_capability(&self, cap: AgentCapability) -> anyhow::Result<Vec<AgentInfo>> {
-        #[cfg(feature = "swarm")]
+        #[cfg(feature = "plugin-swarm")]
         {
             let agents = self.storage.list_all_agents().await?;
             Ok(agents
@@ -150,7 +150,7 @@ impl AgentRegistry {
                 .filter(|a| a.capabilities.contains(&cap) && a.status != AgentStatus::Dead)
                 .collect())
         }
-        #[cfg(not(feature = "swarm"))]
+        #[cfg(not(feature = "plugin-swarm"))]
         {
             let _ = cap;
             Ok(Vec::new())
@@ -158,7 +158,7 @@ impl AgentRegistry {
     }
 
     pub async fn heartbeat(&self, id: &str) -> anyhow::Result<()> {
-        #[cfg(feature = "swarm")]
+        #[cfg(feature = "plugin-swarm")]
         {
             if let Some(mut agent) = self.storage.get_agent(id).await? {
                 agent.last_heartbeat = Utc::now();
@@ -167,7 +167,7 @@ impl AgentRegistry {
             }
             Ok(())
         }
-        #[cfg(not(feature = "swarm"))]
+        #[cfg(not(feature = "plugin-swarm"))]
         {
             let _ = id;
             Ok(())

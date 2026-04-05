@@ -141,7 +141,7 @@ impl Channel for WhatsAppChannel {
         Ok(rx)
     }
 
-    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<()> {
+    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<Option<String>> {
         let client = reqwest::Client::new();
         let formatted = format_outgoing_text(FormatTarget::WhatsApp, &message.text);
 
@@ -170,7 +170,7 @@ impl Channel for WhatsAppChannel {
             anyhow::bail!("WhatsApp send failed: {}", text);
         }
 
-        Ok(())
+        Ok(None)
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {

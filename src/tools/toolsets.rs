@@ -2,17 +2,58 @@
 
 use crate::config::ToolsetConfig;
 
+/// Groups that should stay available whenever a manifest narrows tool access.
+pub const CORE_TOOLSET_GROUPS: &[&str] = &["runtime", "fs", "memory", "sessions", "misc"];
+
 pub fn toolset_for_tool(name: &str) -> &'static str {
     match name {
         "exec" => "runtime",
         "Read" | "Write" | "Edit" => "fs",
-        "web_search" | "web_fetch" | "browser" => "web",
+        "web_search" | "web_fetch" => "web",
+        "browser" => "browser",
         "memory_search" | "memory_get" | "session_search" => "memory",
+        "embedding_status" | "embedding_store" | "embedding_search" => "memory",
         "list_models" | "doctor" => "sessions",
         "message" => "messaging",
         "skill_manager" => "skills",
-        "mcp" | "create_tool" | "list_custom_tools" | "vibemania" => "advanced",
+        "mcp" | "create_tool" | "list_custom_tools" | "vibemania" | "worktree" => "advanced",
+        "coding_swarm" => "advanced",
         _ => "misc",
+    }
+}
+
+/// Expand a package id (manifest or CLI) into toolset group names.
+pub fn expand_package(name: &str) -> Vec<&'static str> {
+    let n = name.trim();
+    match n.to_ascii_lowercase().as_str() {
+        "web" => vec!["web"],
+        "browser" => vec!["browser"],
+        "skills" => vec!["skills"],
+        "advanced" => vec!["advanced"],
+        "unthinkclaw-live" | "live" => vec!["web", "browser", "skills", "advanced"],
+        "core" | "default" => CORE_TOOLSET_GROUPS.to_vec(),
+        _ => vec![],
+    }
+}
+
+/// Merge named packages into `toolsets.enabled` (idempotent), ensuring core groups stay on.
+pub fn apply_package_manifest(toolsets: &mut ToolsetConfig, packages: &[String]) {
+    if packages.is_empty() {
+        return;
+    }
+    for g in CORE_TOOLSET_GROUPS {
+        let s = (*g).to_string();
+        if !toolsets.enabled.contains(&s) {
+            toolsets.enabled.push(s);
+        }
+    }
+    for pkg in packages {
+        for g in expand_package(pkg) {
+            let s = g.to_string();
+            if !toolsets.enabled.contains(&s) {
+                toolsets.enabled.push(s);
+            }
+        }
     }
 }
 

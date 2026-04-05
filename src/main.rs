@@ -23,6 +23,7 @@ use unthinkclaw::policy::ExecutionPolicy;
 use unthinkclaw::prompt;
 use unthinkclaw::self_update::{SelfUpdater, UpdateOutcome};
 use unthinkclaw::skills;
+#[cfg(feature = "channel-telegram")]
 use unthinkclaw::telegram_runtime::run_telegram_chat;
 
 #[derive(Parser)]
@@ -421,9 +422,19 @@ async fn main() -> anyhow::Result<()> {
             discord_token: _discord_token,
             discord_channel_id: _discord_channel_id,
         } => {
-            let cfg = load_config(&config);
+            let mut cfg = load_config(&config);
             let model = model.unwrap_or(cfg.model.clone());
             let workspace = workspace.unwrap_or(cfg.workspace.clone());
+
+            match unthinkclaw::plugins::load_manifest(&workspace, &cfg) {
+                Ok(Some(m)) => unthinkclaw::plugins::merge_manifest_into_config(&mut cfg, &m),
+                Ok(None) => {}
+                Err(e) => tracing::warn!("plugin manifest skipped: {:#}", e),
+            }
+
+            #[cfg(feature = "plugin-poke")]
+            let _poke_tunnel =
+                unthinkclaw::plugins::poke::spawn_poke_tunnel(&workspace, &config, &cfg).await?;
 
             let provider = build_provider(&cfg);
             let policy = Arc::new(ExecutionPolicy::from_config(&cfg.policy));
@@ -431,8 +442,16 @@ async fn main() -> anyhow::Result<()> {
             let embedding_provider = build_embedding_provider(&cfg)?;
             let self_updater = SelfUpdater::new(workspace.clone(), cfg.runtime.self_update.clone());
 
-            // Build system prompt from workspace context files
-            let system_prompt = prompt::build_system_prompt(&workspace).await;
+            let file_prompt = prompt::build_system_prompt(&workspace).await;
+            let mut system_prompt = file_prompt;
+            if !cfg.system_prompt.trim().is_empty() {
+                system_prompt.push_str("\n\n## From config (unthinkclaw.json)\n");
+                system_prompt.push_str(cfg.system_prompt.trim());
+            }
+            if cfg.plugin_layer.enabled {
+                system_prompt.push_str("\n\n");
+                system_prompt.push_str(&unthinkclaw::context::plugin_layer_policy_prompt());
+            }
 
             // Discover skills
             let discovered_skills = skills::discover_skills_for_workspace(Some(&workspace));
@@ -449,6 +468,10 @@ async fn main() -> anyhow::Result<()> {
                 Arc::clone(&provider),
                 &cfg,
             );
+            let plugin_host = unthinkclaw::plugins::PluginHost::new();
+            for t in plugin_host.extra_tools {
+                tools.push(t);
+            }
 
             // Load any previously created dynamic tools
             let dynamic_tools =
@@ -462,7 +485,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // Start swarm coordinator if requested
-            #[cfg(feature = "swarm")]
+            #[cfg(feature = "plugin-swarm")]
             let coordinator = {
                 let storage: Arc<dyn unthinkclaw::swarm::SwarmStorage> = Arc::new(
                     unthinkclaw::swarm::SurrealBackend::new(
@@ -475,7 +498,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(coord)
             };
 
-            #[cfg_attr(not(feature = "swarm"), allow(unused_mut))]
+            #[cfg_attr(not(feature = "plugin-swarm"), allow(unused_mut))]
             let mut runner =
                 AgentRunner::new(provider, tools, memory.clone(), &system_prompt, model)
                     .with_config(cfg.agent.clone())
@@ -486,7 +509,7 @@ async fn main() -> anyhow::Result<()> {
                     .with_skills(discovered_skills.clone())
                     .await;
 
-            #[cfg(feature = "swarm")]
+            #[cfg(feature = "plugin-swarm")]
             if let Some(coord) = coordinator {
                 runner = runner.with_swarm(coord);
             }
@@ -498,10 +521,12 @@ async fn main() -> anyhow::Result<()> {
             )));
 
             // Add tools that need runner reference
+            #[cfg(feature = "plugin-swarm")]
             runner_arc
-                .add_tool(Arc::new(
-                    unthinkclaw::tools::coding_swarm::CodingSwarmTool::new(runner_arc.clone(), 3),
-                ))
+                .add_tool(Arc::new(unthinkclaw::tools::CodingSwarmTool::new(
+                    runner_arc.clone(),
+                    3,
+                )))
                 .await;
             runner_arc
                 .add_tool(Arc::new(
@@ -540,6 +565,9 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let _self_update_handle = self_updater.start();
+
+            #[cfg(not(feature = "channel-telegram"))]
+            let _telegram_opts = (&telegram_token, &telegram_chat_id);
 
             match channel.as_str() {
                 #[cfg(feature = "channel-cli")]
@@ -598,7 +626,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 other => {
                     anyhow::bail!(
-                        "Unknown channel: {} (supported: cli, telegram, discord)",
+                        "Channel '{}' is not available in this build. Enable the matching Cargo feature (e.g. --features channel-telegram).",
                         other
                     );
                 }
@@ -656,16 +684,22 @@ async fn main() -> anyhow::Result<()> {
             model,
             port,
         } => {
-            let cfg = load_config(&config);
+            let mut cfg = load_config(&config);
             let model = model.unwrap_or(cfg.model.clone());
             let workspace = workspace.unwrap_or(cfg.workspace.clone());
+
+            match unthinkclaw::plugins::load_manifest(&workspace, &cfg) {
+                Ok(Some(m)) => unthinkclaw::plugins::merge_manifest_into_config(&mut cfg, &m),
+                Ok(None) => {}
+                Err(e) => tracing::warn!("plugin manifest skipped: {:#}", e),
+            }
 
             let provider = build_provider(&cfg);
             let policy = Arc::new(ExecutionPolicy::from_config(&cfg.policy));
             let memory = build_memory_backend(&workspace, &cfg).await?;
             let embedding_provider = build_embedding_provider(&cfg)?;
 
-            let tools = build_base_tools(
+            let mut tools = build_base_tools(
                 &workspace,
                 Arc::clone(&policy),
                 Arc::clone(&memory),
@@ -673,9 +707,22 @@ async fn main() -> anyhow::Result<()> {
                 Arc::clone(&provider),
                 &cfg,
             );
+            let plugin_host = unthinkclaw::plugins::PluginHost::new();
+            for t in plugin_host.extra_tools {
+                tools.push(t);
+            }
 
             if let Some(port) = port {
-                let system_prompt = cfg.system_prompt.clone();
+                let file_prompt = prompt::build_system_prompt(&workspace).await;
+                let mut system_prompt = file_prompt;
+                if !cfg.system_prompt.trim().is_empty() {
+                    system_prompt.push_str("\n\n## From config (unthinkclaw.json)\n");
+                    system_prompt.push_str(cfg.system_prompt.trim());
+                }
+                if cfg.plugin_layer.enabled {
+                    system_prompt.push_str("\n\n");
+                    system_prompt.push_str(&unthinkclaw::context::plugin_layer_policy_prompt());
+                }
                 let runner = Arc::new(
                     unthinkclaw::agent::loop_runner::AgentRunner::new(
                         Arc::clone(&provider),
@@ -1150,14 +1197,14 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Swarm { action, workspace } => {
-            #[cfg(not(feature = "swarm"))]
+            #[cfg(not(feature = "plugin-swarm"))]
             {
                 let _ = (action, workspace);
-                eprintln!("Swarm requires the 'swarm' feature. Build with: cargo build --release --features swarm");
+                eprintln!("Swarm requires the plugin-swarm feature. Build with: cargo build --release --features plugin-swarm");
                 std::process::exit(1);
             }
 
-            #[cfg(feature = "swarm")]
+            #[cfg(feature = "plugin-swarm")]
             {
                 use unthinkclaw::swarm::models::LinkDirection;
                 use unthinkclaw::swarm::{
@@ -1334,12 +1381,7 @@ async fn main() -> anyhow::Result<()> {
                             println!("No pending tasks.");
                         } else {
                             for t in &tasks {
-                                println!(
-                                    "[{:?}] {} — {}",
-                                    t.priority,
-                                    t.title,
-                                    t.status.to_string()
-                                );
+                                println!("[{:?}] {} — {}", t.priority, t.title, t.status);
                             }
                         }
                     }

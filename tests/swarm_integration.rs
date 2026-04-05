@@ -1,7 +1,7 @@
 //! Integration tests for the multi-agent swarm system.
-//! Run with: cargo test --features swarm --test swarm_integration
+//! Run with: cargo test --features plugin-swarm --test swarm_integration
 
-#![cfg(feature = "swarm")]
+#![cfg(feature = "plugin-swarm")]
 
 use std::sync::Arc;
 use unthinkclaw::swarm::models::*;
@@ -436,7 +436,7 @@ async fn test_team_messaging() {
         .get_unread(&team.team_id, &id2)
         .await
         .unwrap();
-    assert!(unread.len() >= 1);
+    assert!(!unread.is_empty());
 }
 
 // === Handoff ===

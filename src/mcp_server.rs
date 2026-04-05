@@ -2,9 +2,11 @@
 //! Other AI clients can connect to prompt unthinkclaw or use its tools.
 
 use axum::{
+    body::Bytes,
     extract::State,
+    http::header::{self, HeaderMap, HeaderName, HeaderValue},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -26,6 +28,14 @@ struct JsonRpcRequest {
     method: String,
     #[serde(default)]
     params: Option<Value>,
+}
+
+/// HTTP POST body may be a single JSON-RPC object or a batch array (Poke / MCP clients).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum McpHttpPayload {
+    Single(JsonRpcRequest),
+    Batch(Vec<JsonRpcRequest>),
 }
 
 #[derive(Debug, Serialize)]
@@ -489,8 +499,11 @@ pub async fn run_mcp_server_http(
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/chat", post(handle_http_chat))
-        .route("/mcp", post(handle_http_mcp))
-        .route("/", post(handle_http_mcp))
+        .route("/mcp", post(handle_http_mcp).options(handle_mcp_options))
+        .route(
+            "/",
+            post(handle_http_root_mcp).options(handle_mcp_options_root),
+        )
         .with_state(state);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
@@ -546,12 +559,138 @@ async fn handle_http_chat(
     }
 }
 
+/// CORS + optional `Mcp-Session-Id` echo (same pattern as poke-around’s MCP HTTP server).
+fn mcp_response_headers(req_headers: &HeaderMap) -> HeaderMap {
+    let mut h = HeaderMap::new();
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, OPTIONS"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("Content-Type, Authorization, Mcp-Session-Id, Accept"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static("Mcp-Session-Id"),
+    );
+    if let Some(v) = req_headers.get("mcp-session-id") {
+        if let Ok(name) = HeaderName::from_lowercase(b"mcp-session-id") {
+            h.insert(name, v.clone());
+        }
+    }
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    h
+}
+
+async fn handle_mcp_options() -> impl IntoResponse {
+    let mut h = HeaderMap::new();
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, OPTIONS"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("Content-Type, Authorization, Mcp-Session-Id, Accept"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static("Mcp-Session-Id"),
+    );
+    (StatusCode::NO_CONTENT, h)
+}
+
+async fn handle_mcp_options_root() -> impl IntoResponse {
+    handle_mcp_options().await
+}
+
 async fn handle_http_mcp(
     State(state): State<McpState>,
-    Json(request): Json<JsonRpcRequest>,
-) -> impl IntoResponse {
-    let response = handle_request(&request, &state.tools, &state.provider, &state.model).await;
-    Json(response)
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    dispatch_mcp_http(&state, &headers, &body).await
+}
+
+async fn handle_http_root_mcp(
+    State(state): State<McpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    dispatch_mcp_http(&state, &headers, &body).await
+}
+
+async fn dispatch_mcp_http(state: &McpState, req_headers: &HeaderMap, body: &[u8]) -> Response {
+    let mut res_headers = mcp_response_headers(req_headers);
+    if body.is_empty() {
+        let body = r#"{"jsonrpc":"2.0","error":{"code":-32700,"message":"empty body"},"id":null}"#;
+        res_headers.insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&body.len().to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+        return (StatusCode::BAD_REQUEST, res_headers, body.to_string()).into_response();
+    }
+
+    let payload: McpHttpPayload = match serde_json::from_slice(body) {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = esc_json_str(&e.to_string());
+            let body = format!(
+                r#"{{"jsonrpc":"2.0","error":{{"code":-32700,"message":"{}"}},"id":null}}"#,
+                msg
+            );
+            res_headers.insert(
+                header::CONTENT_LENGTH,
+                HeaderValue::from_str(&body.len().to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("0")),
+            );
+            return (StatusCode::BAD_REQUEST, res_headers, body).into_response();
+        }
+    };
+
+    let json_body = match payload {
+        McpHttpPayload::Single(req) => {
+            let resp = handle_request(&req, &state.tools, &state.provider, &state.model).await;
+            serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string())
+        }
+        McpHttpPayload::Batch(reqs) => {
+            let mut parts: Vec<JsonRpcResponse> = Vec::new();
+            for req in reqs {
+                let skip_response = req.id.is_none() && req.method.starts_with("notifications/");
+                let resp = handle_request(&req, &state.tools, &state.provider, &state.model).await;
+                if !skip_response {
+                    parts.push(resp);
+                }
+            }
+            serde_json::to_string(&parts).unwrap_or_else(|_| "[]".to_string())
+        }
+    };
+
+    res_headers.insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&json_body.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    (StatusCode::OK, res_headers, json_body).into_response()
+}
+
+fn esc_json_str(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 async fn write_response(
@@ -574,6 +713,7 @@ async fn handle_request(
     match req.method.as_str() {
         "initialize" => handle_initialize(req.id.clone()),
         "notifications/initialized" => JsonRpcResponse::success(req.id.clone(), Value::Null),
+        "ping" => JsonRpcResponse::success(req.id.clone(), serde_json::json!({})),
         "tools/list" => handle_tools_list(req.id.clone(), tools, provider.is_some()),
         "tools/call" => {
             handle_tools_call(req.id.clone(), req.params.as_ref(), tools, provider, model).await
@@ -592,7 +732,7 @@ fn handle_initialize(id: Option<Value>) -> JsonRpcResponse {
         serde_json::json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {
-                "tools": {}
+                "tools": { "listChanged": false }
             },
             "serverInfo": {
                 "name": "unthinkclaw",

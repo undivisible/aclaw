@@ -254,6 +254,10 @@ pub fn create_embedding_provider(
             let api_key = api_key.context("Gemini API key required")?;
             Ok(Arc::new(GeminiEmbedding::new(api_key, model)))
         }
+        #[cfg(feature = "plugin-fastembed")]
+        "fastembed" | "local_onnx" | "onnx" => Ok(Arc::new(
+            crate::memory::fastembed_local::FastembedEmbedding::new(model)?,
+        )),
         _ => anyhow::bail!("Unknown embedding provider: {}", provider_type),
     }
 }

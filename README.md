@@ -15,6 +15,14 @@ layer.
 If you want the bot running on your laptop, desktop, server, or box at home,
 this is the branch.
 
+## v2 architecture (minimal core + plugins)
+
+- **Default build** is intentionally small: `core` + `channel-cli` + `provider-ollama`. Tool packs such as web, browser, skills, advanced MCP/vibemania, swarm, Poke, and local ONNX embeddings are **Cargo features** (`plugin-web`, `plugin-browser`, `plugin-skills`, `plugin-advanced`, `plugin-swarm`, `plugin-poke`, `plugin-fastembed`). Use `desktop` for a typical Telegram + Anthropic + tool-pack setup, or `full` for everything.
+- **Plugin manifest**: optional `.unthinkclaw/plugins/manifest.json` merges package names into toolset allowlists and can append a `system_prompt_suffix` (see `src/plugins/manifest.rs`).
+- **Poke**: with `plugin-poke`, set `plugin_layer.poke_tunnel` in config to spawn `poke-sdk/start.js`, which starts the MCP HTTP server for Poke registration.
+- **Native plugins**: see [`docs/NATIVE_PLUGINS.md`](docs/NATIVE_PLUGINS.md) and the optional `vendor/equilibrium` submodule for equilibrium-based FFI.
+- **Install helper**: `./install.sh` builds release binaries and runs `unthinkclaw-install install` (copies `unthinkclaw` into `~/.local/bin` by default).
+
 ## Current Status
 
 As of March 18, 2026:

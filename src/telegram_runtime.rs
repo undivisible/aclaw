@@ -21,7 +21,6 @@ pub async fn run_telegram_chat(
     skills_count: usize,
     workspace: PathBuf,
 ) -> anyhow::Result<()> {
-
     let tg = TelegramChannel::new(token.clone(), chat_id).with_memory(memory.clone());
     let tg_arc = Arc::new(tg.clone());
 

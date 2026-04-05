@@ -22,9 +22,13 @@ This starts `unthinkclaw mcp --port 3333` and prints the poke registration comma
 
 ### 3. Register with Poke
 
+Use loopback explicitly if your environment maps `localhost` oddly (containers, split DNS):
+
 ```bash
-bunx poke@latest mcp add http://localhost:3333/mcp --name unthinkclaw
+bunx poke@latest mcp add http://127.0.0.1:3333/mcp --name unthinkclaw
 ```
+
+Same URL works with `http://localhost:3333/mcp` on typical desktops.
 
 ---
 
@@ -39,7 +43,7 @@ Run the server directly:
 Then register:
 
 ```bash
-bunx poke@latest mcp add http://localhost:3333/mcp --name unthinkclaw
+bunx poke@latest mcp add http://127.0.0.1:3333/mcp --name unthinkclaw
 ```
 
 ---

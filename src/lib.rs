@@ -18,8 +18,8 @@ pub mod agent;
 pub mod bootstrap;
 pub mod channels;
 pub mod claw_adapter;
-pub mod context;
 pub mod config;
+pub mod context;
 pub mod cost;
 pub mod cron_scheduler;
 pub mod diagnostics;
@@ -29,6 +29,7 @@ pub mod mcp;
 pub mod mcp_server;
 pub mod memory;
 pub mod plugin;
+pub mod plugins;
 pub mod policy;
 pub mod prompt;
 pub mod providers;
@@ -36,8 +37,9 @@ pub mod runtime;
 pub mod scheduler;
 pub mod self_update;
 pub mod skills;
-#[cfg(feature = "swarm")]
+#[cfg(feature = "plugin-swarm")]
 pub mod swarm;
+#[cfg(feature = "channel-telegram")]
 pub mod telegram_runtime;
 pub mod text;
 pub mod tools;
@@ -46,7 +48,7 @@ pub use agent::{AgentMode, AgentRunner};
 pub use channels::Channel;
 pub use cost::CostTracker;
 pub use scheduler::Scheduler;
-#[cfg(feature = "swarm")]
+#[cfg(feature = "plugin-swarm")]
 pub use swarm::SwarmCoordinator;
-#[cfg(feature = "swarm")]
+#[cfg(feature = "plugin-swarm")]
 pub use swarm::{ConcurrencyScheduler, DelegationManager, HandoffManager, TeamManager};

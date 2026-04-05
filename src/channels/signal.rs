@@ -83,7 +83,7 @@ impl Channel for SignalChannel {
         Ok(rx)
     }
 
-    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<()> {
+    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<Option<String>> {
         let client = reqwest::Client::new();
 
         let body = serde_json::json!({
@@ -98,7 +98,7 @@ impl Channel for SignalChannel {
             .send()
             .await?;
 
-        Ok(())
+        Ok(None)
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {

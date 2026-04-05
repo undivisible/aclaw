@@ -75,7 +75,7 @@ impl Channel for TeamsChannel {
         Ok(rx)
     }
 
-    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<()> {
+    async fn send(&self, message: OutgoingMessage) -> anyhow::Result<Option<String>> {
         let client = reqwest::Client::new();
 
         // Get Bot Framework token
@@ -108,7 +108,7 @@ impl Channel for TeamsChannel {
             .send()
             .await?;
 
-        Ok(())
+        Ok(None)
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
