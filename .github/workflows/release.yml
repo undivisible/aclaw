@@ -15,15 +15,20 @@ jobs:
         include:
           - os: macos-14
             suffix: macos-aarch64
-          - os: macos-13
+            target: aarch64-apple-darwin
+          - os: macos-14
             suffix: macos-x86_64
+            target: x86_64-apple-darwin
           - os: ubuntu-22.04
             suffix: linux-x86_64
+            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install Linux build deps
         if: runner.os == 'Linux'
@@ -31,33 +36,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake pkg-config libssl-dev clang
 
-      - name: Cargo build (default)
-        run: cargo build --release --locked
+      - name: Cargo build
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Package default tarball
+      - name: Package tarball
         run: |
-          strip target/release/unthinkclaw 2>/dev/null || true
-          cd target/release
-          tar czvf "../../unthinkclaw-${{ matrix.suffix }}.tar.gz" unthinkclaw
-          cd ../..
-
-      - name: Cargo build (v2 minimal)
-        run: |
-          CARGO_TARGET_DIR=target-minimal cargo build --release --locked \
-            --no-default-features \
-            --features "core,channel-cli,provider-ollama"
-
-      - name: Package minimal tarball
-        run: |
-          strip target-minimal/release/unthinkclaw 2>/dev/null || true
-          cd target-minimal/release
-          tar czvf "../../../unthinkclaw-minimal-${{ matrix.suffix }}.tar.gz" unthinkclaw
-          cd ../..
+          BIN="target/${{ matrix.target }}/release/unthinkclaw"
+          strip "$BIN" 2>/dev/null || true
+          tar czvf "unthinkclaw-${{ matrix.suffix }}.tar.gz" -C "target/${{ matrix.target }}/release" unthinkclaw
 
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.suffix }}
-          path: "unthinkclaw*.tar.gz"
+          path: unthinkclaw-${{ matrix.suffix }}.tar.gz
 
   publish:
     needs: build
