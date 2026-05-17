@@ -15,6 +15,7 @@
 //! Scheduler — Cron-based task automation (Phase 4)
 
 pub mod agent;
+pub mod agent_http;
 pub mod bootstrap;
 pub mod channels;
 pub mod claw_adapter;

@@ -2,6 +2,7 @@
 //! Enable only what you need via Cargo features.
 
 pub mod formatting;
+pub mod http_inject;
 pub mod traits;
 
 // Core channels (always available or feature-gated)

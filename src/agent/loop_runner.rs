@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 
 use crate::agent::hooks::{run_post_hooks, run_pre_hooks, HookDecision, ToolHook};
+use crate::agent::stream::{emit, AgentStreamEvent};
 use crate::agent::mode::{
     is_approval, is_rejection, AgentMode, NullChannel, PendingPlan, PendingPlans,
 };
@@ -64,6 +65,7 @@ pub struct AgentRunner {
     pending_plans: PendingPlans,
     /// Registered tool hooks (PreToolUse / PostToolUse)
     hooks: Arc<std::sync::RwLock<Vec<Arc<dyn ToolHook>>>>,
+    stream_sink: Arc<std::sync::RwLock<Option<crate::agent::stream::AgentStreamTx>>>,
 }
 
 impl AgentRunner {
@@ -92,7 +94,16 @@ impl AgentRunner {
             swarm: Arc::new(std::sync::RwLock::new(None)),
             pending_plans: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hooks: Arc::new(std::sync::RwLock::new(Vec::new())),
+            stream_sink: Arc::new(std::sync::RwLock::new(None)),
         }
+    }
+
+    pub fn set_stream_sink(&self, tx: Option<crate::agent::stream::AgentStreamTx>) {
+        *self.stream_sink.write().unwrap() = tx;
+    }
+
+    pub fn stream_sink(&self) -> Option<crate::agent::stream::AgentStreamTx> {
+        self.stream_sink.read().unwrap().clone()
     }
 
     #[cfg(feature = "swarm")]
@@ -363,6 +374,14 @@ impl AgentRunner {
         msg: &IncomingMessage,
         channel: &dyn Channel,
     ) -> anyhow::Result<String> {
+        let stream = self.stream_sink();
+        emit(
+            &stream,
+            AgentStreamEvent::Status {
+                message: "Thinking…".into(),
+            },
+        );
+
         // Send draft placeholder if channel supports live updates, otherwise typing indicator
         let draft_id: Option<String> = if channel.supports_draft_updates() {
             channel.send_draft(&msg.chat_id, "⏳").await.unwrap_or(None)
@@ -734,6 +753,12 @@ impl AgentRunner {
                         // Short execution — return directly
                         tracing::info!("Done after {} round(s) [{:?}]", round + 1, state);
                         self.persist_conversation(msg, &text).await?;
+                        emit(
+                            &stream,
+                            AgentStreamEvent::Done {
+                                response: text.clone(),
+                            },
+                        );
                         if let Some(ref mid) = draft_id {
                             let _ = channel.finalize_draft(&msg.chat_id, mid, &text).await;
                             return Ok(String::new()); // channel sent it
@@ -743,6 +768,12 @@ impl AgentRunner {
                     AgentState::Summarizing | AgentState::Direct | AgentState::Planning => {
                         tracing::info!("Done after {} round(s) [{:?}]", round + 1, state);
                         self.persist_conversation(msg, &text).await?;
+                        emit(
+                            &stream,
+                            AgentStreamEvent::Done {
+                                response: text.clone(),
+                            },
+                        );
                         if let Some(ref mid) = draft_id {
                             let _ = channel.finalize_draft(&msg.chat_id, mid, &text).await;
                             return Ok(String::new()); // channel sent it
@@ -844,6 +875,14 @@ impl AgentRunner {
                         .await;
                 }
 
+                emit(
+                    &stream,
+                    AgentStreamEvent::ToolStart {
+                        name: tc.name.clone(),
+                        hint: extract_tool_hint(&tc.name, &tc.arguments),
+                    },
+                );
+
                 let started = std::time::Instant::now();
 
                 // Pre-tool hooks — a Block decision skips execution entirely
@@ -870,6 +909,14 @@ impl AgentRunner {
                 run_post_hooks(&hooks_snapshot, &tc.name, &tc.arguments, &result).await;
 
                 let elapsed = started.elapsed().as_secs();
+                emit(
+                    &stream,
+                    AgentStreamEvent::ToolEnd {
+                        name: tc.name.clone(),
+                        ok: !result.is_error,
+                        elapsed_secs: elapsed,
+                    },
+                );
 
                 // ── Progress: tool completion ─────────────────────────
                 if let (true, Some(ref mid)) = (channel.supports_draft_updates(), &draft_id) {

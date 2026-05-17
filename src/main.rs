@@ -492,6 +492,14 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let runner_arc = Arc::new(runner);
+
+            if std::env::var("UNTHINKCLAW_HTTP")
+                .map(|v| v != "0")
+                .unwrap_or(true)
+            {
+                unthinkclaw::agent_http::spawn_http_server(Arc::clone(&runner_arc));
+            }
+
             runner_arc.add_hook(Arc::new(PermissionHook::new(
                 cfg.agent.permissions.deny.clone(),
                 cfg.agent.permissions.allow.clone(),
@@ -552,7 +560,12 @@ async fn main() -> anyhow::Result<()> {
                     );
                     println!("   Workspace: {}", workspace.display());
                     println!("   Channel: CLI");
-                    println!("   Type /quit to exit\n");
+                    println!("   Type /quit to exit");
+                    println!(
+                        "   Agent HTTP: http://{}/v1/chat (UNTHINKCLAW_HTTP_PORT)",
+                        unthinkclaw::agent_http::http_listen_addr()
+                    );
+                    println!();
 
                     // Start heartbeat background task
                     let heartbeat_cfg = HeartbeatConfig {

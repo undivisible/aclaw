@@ -5,6 +5,7 @@
 pub mod hooks;
 pub mod loop_runner;
 pub mod mode;
+pub mod stream;
 pub mod streaming;
 
 pub use loop_runner::AgentRunner;
